@@ -17,15 +17,7 @@ ELECTRON_RUN_AS_NODE=1 "$BIN" test/<script>.mjs
 | `dsh-jira-transition.mjs` | yes | `jira_transition`: listing transitions, preview vs. `apply`, invalid key / invalid transition id failure paths (never writes on the happy path) |
 | `dsh-jira-status.mjs` | yes | end-to-end panel run against a real site (real 300+ item result, filter, abort on switch, virtualization); **skips itself with `SKIP:`** when Jira is unreachable, so a flaky network never looks like a regression |
 
-## Stale suites (kept for reference only)
-
-These three predate the 0.7+ panel redesign (they still expect the removed "current sprint" scope segment and the old inline settings block) and **fail**:
-
-- `dsh-jira-client.mjs`
-- `dsh-jira-client2.mjs`
-- `dsh-jira-watch.mjs`
-
-They were superseded by `dsh-jira-visual.mjs` + `dsh-jira-credential.mjs`; delete them if you do not need the history.
+Three older suites (`dsh-jira-client.mjs`, `dsh-jira-client2.mjs`, `dsh-jira-watch.mjs`) predated the 0.7+ panel redesign, kept failing ever since, and were removed in 0.13.1; `visual` + `credential` cover the same ground now.
 
 ## Older probes
 
