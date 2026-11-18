@@ -26,6 +26,7 @@ DSH serves. There is no bundler, no `lib/`, no dependencies for the client half.
 ```bash
 BIN="/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness"
 ELECTRON_RUN_AS_NODE=1 "$BIN" --check index.js && ELECTRON_RUN_AS_NODE=1 "$BIN" --check client.js
+ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-bundle-id.mjs  # offline (package/bundle identity; run it after any rename)
 ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-visual.mjs      # offline (rendering, virtualization)
 ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-credential.mjs  # offline (config dialog + all 4 routes)
 ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-i18n.mjs        # offline (language matrix + paging)
@@ -51,8 +52,13 @@ contains one — every fixture token and host is fake (`ATATT3xFfGF0…`, `examp
 - **Client half imports only platform modules**: `react`, `react-dom`, `@tanstack/react-virtual` are in
   DSH's module table. Never `require` an `@deepseek-ai/*` package from `client.js`, and never add a
   build step.
-- **`package.json.name` must equal `cordis.patch.yml`'s `insert[].name`** — DSH resolves the module by it.
-  The `@local/` scope only works for local `link:` installs; keep the publishable name.
+- **`package.json.name`, `cordis.patch.yml`'s `insert[].name` and `client.js`'s
+  `window.__ModuleLoader__.load({ id })` must all be the same string** — DSH resolves the module by it, and
+  the host composes the client boot graph by package name. A mismatched bundle id fails only with
+  `client-modules: bundle <url> loaded without registering "<package>" via __ModuleLoader__.load`: the whole
+  browser half (sidebar entry, panel, config pages) goes dark while the host row still reads `active`.
+  `test/dsh-jira-bundle-id.mjs` pins all three. The `@local/` scope only works for local `link:` installs;
+  keep the publishable name.
 - **Config the panel edits must be `.volatile()`** in the host `Config` and written through
   `ctx.get('settings').mutate(ns, ops, revision)` (ns = the patch row id `jira-work-overview`). Volatile
   fields are reference objects at runtime: read them with `liveSetting()` / `.get()`, never as plain values,
@@ -88,7 +94,7 @@ plugin_manager install_bundle(target="dsh-jira-work-overview")                  
 
 The client half needs no build; DSH serves the declared `./client` file.
 
-## Known open items (as of 0.13.1)
+## Known open items (as of 0.13.2)
 
 - Real-browser verification of virtual-list scrolling, row measurement and `scrollToIndex` resets — the
   offline suite uses a `@tanstack/react-virtual` stand-in, so the real library path is unexercised.

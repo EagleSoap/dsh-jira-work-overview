@@ -4,6 +4,17 @@ All notable changes to **dsh-jira-work-overview** are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The first 25 releases were built in a single day, so the dates are real but the cadence was not: each entry lists what changed, not how long it took.
 
+## [0.13.2] - 2026-11-19
+
+### Fixed
+
+- **The client half never loaded after the 0.13.0 rename.** `client.js` still registered its bundle as `@local/dsh-jira-work-overview` while the package — and therefore the host's client-module row — is `dsh-jira-work-overview`. The host composes the boot graph by package name and only reports `client-modules: bundle <url> loaded without registering "<package>" via __ModuleLoader__.load`, so the whole browser half stayed dark: the left-sidebar entry, the overlay panel and all three config pages disappeared while `plugin_manager` kept showing `fiberPhase: "active"`. The registered id now equals `package.json.name`.
+- `README.zh.md` still called the package `@local/dsh-jira-work-overview` in its title and in the two `plugins.bundle.config` / `plugins.row.config` key examples.
+
+### Added
+
+- `test/dsh-jira-bundle-id.mjs`: offline regression suite that pins `window.__ModuleLoader__.load({ id })` and `cordis.patch.yml`'s `insert[].name` to `package.json.name`, and rejects any `@local/` leftover in `client.js` / `cordis.patch.yml` / `package.json`.
+
 ## [0.13.1] - 2026-11-19
 
 ### Removed

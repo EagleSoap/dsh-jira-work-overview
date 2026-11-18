@@ -9,7 +9,10 @@
  * 再把 JSON 按 sprint 分组渲染。同一个操作只实现一次。
  */
 window.__ModuleLoader__.load({
-  id: '@local/dsh-jira-work-overview',
+  // 这个 id 必须**等于包名**：host 的 client-modules 按包名物化 bundle，
+  // 对不上就只报 `loaded without registering "<包名>" via __ModuleLoader__.load`，
+  // 半边整个不加载（左侧栏入口 + 面板 + 配置页一起消失）。改名后忘了改这里 = 2026-11-19 的这场事故。
+  id: 'dsh-jira-work-overview',
   factory(require) {
     const React = require('react');
     const h = React.createElement;

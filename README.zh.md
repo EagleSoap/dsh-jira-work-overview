@@ -1,4 +1,4 @@
-# Jira work overview（包名 `@local/dsh-jira-work-overview`）
+# Jira work overview（包名 `dsh-jira-work-overview`）
 
 在 DSH 里查看**指派给我的 Jira 工作项**以及它们的实时工作流状态，用于快速回答「我这个迭代还要做什么」「哪些已经开发完在等测试」。
 
@@ -168,9 +168,9 @@ Jira Cloud **没有**给第三方 issue 事件的 websocket / SSE 长连接（�
 ① 最省事：打开左侧栏那个 **Jira work overview** 面板 → **标题右侧**有 **「配置」** 按钮，
 点一下弹出独立的令牌弹窗（Esc 或点遮罩先关弹窗、再关面板）；
 ② 插件页 → 点开 **Jira work overview** → 描述下面就有一段「Jira 令牌」
-（client 半边注册在 `plugins.bundle.config`，key 是包名 `@local/dsh-jira-work-overview`）；
+（client 半边注册在 `plugins.bundle.config`，key 是包名 `dsh-jira-work-overview`）；
 ③ 另外该 bundle 里那行 `jira-work-overview` 的标题也是可点的（带一个小箭头），点进去是同一个页面
-（注册在 `plugins.row.config`，key 是 `<包名>#<row id>`，即 `@local/dsh-jira-work-overview#jira-work-overview`）。
+（注册在 `plugins.row.config`，key 是 `<包名>#<row id>`，即 `dsh-jira-work-overview#jira-work-overview`）。
 页面内容：
 
 - **当前令牌**打码显示成首尾各 4 位（如 `ATAT…0000`），并标出来源（DSH 凭据库 / 环境变量 / 插件配置明文）；

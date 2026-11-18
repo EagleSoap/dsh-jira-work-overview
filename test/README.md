@@ -11,6 +11,7 @@ ELECTRON_RUN_AS_NODE=1 "$BIN" test/<script>.mjs
 
 | Script | Needs Jira | Covers |
 | --- | --- | --- |
+| `dsh-jira-bundle-id.mjs` | no | package identity: `__ModuleLoader__.load({ id })` === `package.json.name` === `cordis.patch.yml insert[].name`, no `@local/` leftovers, client half still a `{ id, factory(require) }` bundle that imports no `@deepseek-ai/*` |
 | `dsh-jira-visual.mjs` | no | rendering: grouping, collapse, project tabs, status filter, header total, priority highlight, **virtualization** (windowed DOM vs. placeholder height), fallback when `@tanstack/react-virtual` is missing |
 | `dsh-jira-credential.mjs` | no | configure dialog + all four fetch routes: token/email save, verification and rejection, masked value, two-step clear, watch/language/fetch-size writes, paging (`--limit=0`, safety cap) |
 | `dsh-jira-i18n.mjs` | no | language matrix (`DSH_JIRA_LANG`, `--lang`, `?lang`, config, host preference), Jira data kept verbatim, dictionary parity (zh/en key sets), host paging assertions, the "open `cordis.patch.yml`" route |
