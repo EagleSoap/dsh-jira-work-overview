@@ -96,14 +96,13 @@ plugin_manager install_bundle(target="dsh-jira-work-overview")                  
 
 The client half needs no build; DSH serves the declared `./client` file.
 
-## Known open items (as of 0.13.3)
+## Known open items (as of 0.13.4)
 
-- Real-browser verification of virtual-list scrolling, row measurement and `scrollToIndex` resets — the
-  offline suite uses a `@tanstack/react-virtual` stand-in, so the real library path is unexercised. The
-  stand-in also ignores `getItemKey`/`estimateSize`, so 0.13.3's two reported fixes (group headers no
-  longer overlapping after "collapse all"; no full-screen flash while scrolling) are pinned by assertions
-  but still need an eyeball on a refreshed page. If the flash survives, the next lever is the fork's
-  `directDomUpdates: true` (DSH's own chat list uses it) — untestable offline, so it needs a browser check.
+- **0.13.3's two reported fixes were confirmed in a real browser** (user-verified 2026-11-19, DSH Desktop
+  0.2.2-rc.3): group headers no longer overlap after "collapse all", and scrolling no longer flashes the
+  screen — so the fork's `directDomUpdates: true` lever stays unused. What the offline suite still cannot
+  exercise is the real `@tanstack/react-virtual` path itself: its stand-in ignores
+  `getItemKey`/`estimateSize`, so `scrollToIndex` resets and row measurement remain browser-only.
 - Windows / Linux were implemented by platform dispatch but never run on those systems (only macOS here).
 - Truncation above the 5000-item safety net is covered by host stubs only.
 - Five first-day diagnostic probes remain in `test/` (they print reports instead of asserting) — kept as
