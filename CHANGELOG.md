@@ -4,6 +4,22 @@ All notable changes to **dsh-jira-work-overview** are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The first 25 releases were built in a single day, so the dates are real but the cadence was not: each entry lists what changed, not how long it took.
 
+## [0.13.4] - 2026-11-19
+
+去标识化版本：仓库转为公开之前，把属于作者本人 Jira 的值从代码、文档与 git 历史里全部拿掉。
+
+### Changed
+
+- **示例项目键统一成虚构的 `APP`**：README / 代码注释 / 工具说明 / 测试 fixture 里原先写着作者自己的项目键和几条真实 issue key，现在一律是虚构的 `APP-####`（截图生成器里原有的 `APP` / `OPS` 工单保持原样）。
+- **`projectKey` 的默认值改成 `''`**（原先硬编码成作者的项目键）。它只用于展示；`boardId` 本来就没有默认值。两者都填在你自己的 profile patch 里（README 的配置示例是虚构的 `APP` / `42`）。
+- **测试脚本不再硬编码本机 checkout 路径**：6 个真实站点套件原先写着作者机器上的绝对路径，现在从脚本自身位置推导（`dirname(dirname(fileURLToPath(import.meta.url)))`），换机器 / 换目录都能跑。
+- **真实站点套件的项目键与看板 id 改由环境提供**：优先 `DSH_JIRA_PROJECT` / `DSH_JIRA_BOARD`，其次读 env 文件里的 `JIRA_PROJECT` / `JIRA_BOARD`，都没有时才用虚构的 `APP` / `42`；离线套件用固定假值。
+
+### Security
+
+- 文档里的令牌掩码示例（首尾各 4 位那串）换成纯假值 `ATAT…0000`；fixture token 的尾部也不再复用真实 token 的最后 4 位。
+- git 历史整体重写（所有提交与 4 个 tag 一起重指），把同样的值从历史提交的内容里拿掉；`v0.13.3` 及更早的 Release 仍按 tag 名解析到脱敏后的提交。
+
 ## [0.13.3] - 2026-11-19
 
 ### Fixed

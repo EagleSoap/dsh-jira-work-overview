@@ -43,4 +43,5 @@ ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-shot.mjs --only panel-watch
 
 - **Host-half import**: the suites copy `index.js` next to a copy of `@deepseek-ai/schemastery` in a temp dir. Override the location with `DSH_JIRA_TMP`; the default is `/tmp` when `/tmp/.dsh_jira_env` exists, otherwise `os.tmpdir()`.
 - **Real-Jira suites** read a shell-style env file (`DSH_JIRA_ENV_FILE`, default `$TMP/.dsh_jira_env`, `chmod 600`) containing `JIRA_BASE_URL`, `JIRA_EMAIL` and `JIRA_API_TOKEN`. Nothing in this repository contains a real token: every fixture token (`ATATT3xFfGF0…`) and every host (`example.atlassian.net`) is fake.
+- **Project key**: the real-site suites need a project key for their labels and example issue keys. They take it from `DSH_JIRA_PROJECT`, else `JIRA_PROJECT` in that env file, else the made-up default `APP` — no real project key is stored in the repository.
 - **Offline suites** never touch the network; their fake `fetch` is deterministic, and the client half runs against a tiny React stand-in (no real DOM), so timing-sensitive waits use explicit `settle()` polling.

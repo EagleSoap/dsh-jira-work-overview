@@ -1,14 +1,22 @@
 import { mkdirSync, existsSync } from 'node:fs';
 // 端到端冒烟 v2：伪造 ctx（含内存凭据库），验证 Config 校验、明文 token 自动迁移、工具输出。
 import { readFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 /* --- 跨平台：临时目录与本机凭据文件（Windows 上用 os.tmpdir()，可用 DSH_JIRA_TMP 覆盖） --- */
 const TMP = process.env.DSH_JIRA_TMP || (existsSync(join('/tmp', '.dsh_jira_env')) ? '/tmp' : tmpdir());
 const HOST_COPY = join(TMP, 'dsh-jira-smoke3', 'index.js');
 const ENV_FILE = process.env.DSH_JIRA_ENV_FILE || join(TMP, '.dsh_jira_env');
+
+/* 项目键不写死在仓库里：优先 DSH_JIRA_PROJECT / env 文件里的 JIRA_PROJECT，默认假值 APP。 */
+const PROJECT = process.env.DSH_JIRA_PROJECT
+  || (readFileSync(ENV_FILE, 'utf8').match(/^JIRA_PROJECT=(.+)$/m) || [])[1]?.trim()
+  || 'APP';
+const BOARD = Number(process.env.DSH_JIRA_BOARD
+  || (readFileSync(ENV_FILE, 'utf8').match(/^JIRA_BOARD=(.+)$/m) || [])[1]?.trim()
+  || 42);
 mkdirSync(join(TMP, 'dsh-jira-smoke3'), { recursive: true });
 
 const env = readFileSync(ENV_FILE, 'utf8');
@@ -61,8 +69,8 @@ const raw = {
   baseUrl: 'https://example.atlassian.net',
   email: 'you@example.com',
   apiToken: token,
-  projectKey: 'APP',
-  boardId: 42,
+  projectKey: PROJECT,
+  boardId: BOARD,
   credentialKey: KEY,
   maxResults: 50,
   timeoutMs: 30000,
@@ -83,7 +91,7 @@ console.log('store keys:', [...store.keys()].join(','), '| 值一致:', store.ge
 console.log('迁移后 config.apiToken:', JSON.stringify(validated.apiToken));
 
 const issue = captured.find((d) => d.name === 'jira_issue');
-const detail = await issue.execute({ key: 'APP-4051' }, {});
+const detail = await issue.execute({ key: `${PROJECT}-4051` }, {});
 console.log('--- jira_issue 首行 ---');
 console.log(detail.split('\n')[0]);
 console.log('非法 key:');
@@ -111,11 +119,11 @@ if (registered) {
   const sprint = await registered.handler({ rawInput: 'sprint' });
   console.log(`/jira sprint → kind=${sprint.kind} | 行数 ${sprint.text.split('\n').length}`);
 
-  const one = await registered.handler({ rawInput: 'APP-4051' });
-  console.log(`/jira APP-4051 → kind=${one.kind}`);
+  const one = await registered.handler({ rawInput: `${PROJECT}-4051` });
+  console.log(`/jira ${PROJECT}-4051 → kind=${one.kind}`);
   console.log(one.text.split('\n').slice(0, 2).join('\n'));
 
-  const custom = await registered.handler({ rawInput: 'project = APP AND duedate is not EMPTY' });
+  const custom = await registered.handler({ rawInput: `project = ${PROJECT} AND duedate is not EMPTY` });
   console.log(`/jira <JQL> → kind=${custom.kind}`);
   console.log(custom.text.split('\n').slice(-1)[0]);
 

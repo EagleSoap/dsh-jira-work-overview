@@ -333,8 +333,8 @@ issue 摘要、状态名（`In Review`、`已完成`…）、父需求名、标�
 | `baseUrl` | `''` | Jira 站点地址，例如 `https://your-site.atlassian.net`（必填） |
 | `email` | — | 登录邮箱，Basic 认证用 |
 | `credentialKey` | `JIRA_API_TOKEN` | 去 DSH 凭据库里找 token 用的键名 |
-| `projectKey` | `APP` | 仅用于展示 |
-| `boardId` | `99` | 仅用于展示 |
+| `projectKey` | `''` | 仅用于展示 |
+| `boardId` | — | 仅用于展示 |
 | `maxResults` | `0` | 每次拉取条数。**`0` = 不限制**（一直翻页到没有下一页为止）；正数范围 10–5000。安全上限 5000 条 / 50 页 / `timeoutMs` 超时 |
 | `timeoutMs` | `30000` | 工具调用超时 |
 | `watchEnabled` ✏️ | `true` | 后台定时检查新指派 / 状态变化（关掉就只手动刷新） |

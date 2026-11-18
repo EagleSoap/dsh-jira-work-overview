@@ -570,7 +570,7 @@ export const Config = Schema.object({
   credentialKey: Schema.string()
     .default(DEFAULT_CREDENTIAL_KEY)
     .description(t('config.credentialKey')),
-  projectKey: Schema.string().default('APP').description(t('config.projectKey')),
+  projectKey: Schema.string().default('').description(t('config.projectKey')),
   boardId: Schema.number().description(t('config.boardId')),
   maxResults: Schema.number().default(LIMIT_DEFAULT).volatile()
     .description(t('config.maxResults')),

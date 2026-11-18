@@ -1,16 +1,24 @@
 // 离线端到端：真 host 命令 + 真 client 组件（按 sprint 分组 + 折叠/展开）。
 import { copyFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 /* --- 跨平台：临时目录与本机凭据文件（Windows 上用 os.tmpdir()，可用 DSH_JIRA_TMP 覆盖） --- */
 const TMP = process.env.DSH_JIRA_TMP || (existsSync(join('/tmp', '.dsh_jira_env')) ? '/tmp' : tmpdir());
 const HOST_COPY = join(TMP, 'dsh-jira-smoke3', 'index.js');
 const ENV_FILE = process.env.DSH_JIRA_ENV_FILE || join(TMP, '.dsh_jira_env');
+
+/* 项目键不写死在仓库里：优先 DSH_JIRA_PROJECT / env 文件里的 JIRA_PROJECT，默认假值 APP。 */
+const PROJECT = process.env.DSH_JIRA_PROJECT
+  || (readFileSync(ENV_FILE, 'utf8').match(/^JIRA_PROJECT=(.+)$/m) || [])[1]?.trim()
+  || 'APP';
+const BOARD = Number(process.env.DSH_JIRA_BOARD
+  || (readFileSync(ENV_FILE, 'utf8').match(/^JIRA_BOARD=(.+)$/m) || [])[1]?.trim()
+  || 42);
 mkdirSync(join(TMP, 'dsh-jira-smoke3'), { recursive: true });
 
-const WS = '/path/to/Project/dsh plugins/dsh-jira-work-overview';
+const WS = dirname(dirname(fileURLToPath(import.meta.url)));
 copyFileSync(`${WS}/index.js`, HOST_COPY);
 
 const env = Object.fromEntries(
@@ -187,7 +195,7 @@ const TRANSITIONS = [
 
 async function transitionFetch(url, init) {
   const method = String(init.method ?? 'GET').toUpperCase();
-  const key = new URL(url, 'http://dsh.invalid').searchParams.get('key') ?? 'APP-4051';
+  const key = new URL(url, 'http://dsh.invalid').searchParams.get('key') ?? `${PROJECT}-4051`;
   transitionCalls.push({ method, url, body: init.body ? JSON.parse(init.body) : null });
   await new Promise((resolve) => setTimeout(resolve, 20));
   if (method === 'POST') {
@@ -233,8 +241,8 @@ host.apply(hostCtx, {
   baseUrl: env.JIRA_BASE_URL,
   email: env.JIRA_EMAIL,
   apiToken: env.JIRA_API_TOKEN,
-  projectKey: 'APP',
-  boardId: 42,
+  projectKey: PROJECT,
+  boardId: BOARD,
   maxResults: 50,
   timeoutMs: 30000,
 });
@@ -537,7 +545,7 @@ extraItems = [{
 }];
 await reload();
 // `settle()` 只等到「命令完成」，数据落到 state 还可能差一拍；注入的 CRM 项要真的出现在
-// tab 条上再往下断言，否则会偶发地拿到上一轮（只有 APP）的列表。
+// tab 条上再往下断言，否则会偶发地拿到上一轮（只有当前项目）的列表。
 let withProjects = renderPanel();
 for (let i = 0; i < 40; i += 1) {
   const seen = collect(withProjects, (row) => row.type === 'button' && classNameOf(row).startsWith('jmw-pill'));

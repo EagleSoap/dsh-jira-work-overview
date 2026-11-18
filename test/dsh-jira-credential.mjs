@@ -1,8 +1,8 @@
 // 离线端到端：真 host 命令 + 真 client 组件（按 sprint 分组 + 折叠/展开）。
 import { copyFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 /* --- 跨平台：临时目录与本机凭据文件（Windows 上用 os.tmpdir()，可用 DSH_JIRA_TMP 覆盖） --- */
 const TMP = process.env.DSH_JIRA_TMP || (existsSync(join('/tmp', '.dsh_jira_env')) ? '/tmp' : tmpdir());
@@ -10,7 +10,7 @@ const HOST_COPY = join(TMP, 'dsh-jira-smoke3', 'index.js');
 const ENV_FILE = process.env.DSH_JIRA_ENV_FILE || join(TMP, '.dsh_jira_env');
 mkdirSync(join(TMP, 'dsh-jira-smoke3'), { recursive: true });
 
-const WS = '/path/to/Project/dsh plugins/dsh-jira-work-overview';
+const WS = dirname(dirname(fileURLToPath(import.meta.url)));
 copyFileSync(`${WS}/index.js`, HOST_COPY);
 
 const env = Object.fromEntries(
@@ -276,7 +276,7 @@ const credentials = {
 };
 const settingsWrites = [];
 const settingsService = {
-  documentPath: '/path/to/.dsh/profiles/desktop/cordis.patch.yml',
+  documentPath: join(WS, 'cordis.patch.yml'),
   describe() {
     return [{ ns: 'jira-work-overview', revision: 7, autoGenerate: false }];
   },

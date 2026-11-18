@@ -57,7 +57,7 @@ The bundled `cordis.patch.yml` deliberately contains **no site-specific values**
 | Jira site URL (`baseUrl`) | `https://your-site.atlassian.net` | ✅ — the tools tell you when it is missing |
 | Login email (`email`) | `you@example.com` | ✅ (Basic auth = email + token) |
 | API token | create one at [id.atlassian.com → API tokens](https://id.atlassian.com/manage-profile/security/api-tokens) | ✅ |
-| Project key / board id | `APP` / `99` | optional, used for labels and the sprint field |
+| Project key / board id | `APP` / `42` | optional, used for labels and the sprint field |
 | Fetch size (`maxResults`) | `0` = unlimited | optional |
 | Watch switch / interval, notifications, UI language | — | optional (change = save) |
 

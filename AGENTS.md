@@ -45,7 +45,8 @@ Then reload the plugin in DSH and refresh the page:
 3. Reload the DSH page; the entry appears above Settings in the left sidebar.
 
 The real-site suites read a shell-style env file (`$DSH_JIRA_ENV_FILE`, default `$DSH_JIRA_TMP/.dsh_jira_env`)
-with `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`. **Never commit a token**; nothing in this repo
+with `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN` (and, for the real-site suites' project labels,
+`JIRA_PROJECT` — they fall back to a made-up `APP`). **Never commit a token**; nothing in this repo
 contains one — every fixture token and host is fake (`ATATT3xFfGF0…`, `example.atlassian.net`).
 
 ## Invariants that are easy to break
