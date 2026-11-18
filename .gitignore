@@ -1,0 +1,14 @@
+# dependencies / build output
+node_modules/
+lib/
+dist/
+
+# macOS / editor noise
+.DS_Store
+*.log
+.idea/
+.vscode/
+
+# local scratch
+tmp/
+*.tmp

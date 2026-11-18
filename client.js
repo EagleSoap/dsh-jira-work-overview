@@ -1,0 +1,2461 @@
+/**
+ * Jira work overview —— 浏览器半边（左侧栏入口 + 浮层列表）。
+ *
+ * 这是「纯 JS 的 client 插件」：宿主把本文件当 bundle 直接伺服，因此不能 import
+ * 任何 `@deepseek-ai/*` 客户端包（它们在安装包里不存在，只在构建产物里被内联）。
+ * 只用宿主模块表里的 `react`（`react-dom` 仅用于 createPortal，取不到就退回内联定位）。
+ *
+ * 数据来自 host 半边的 `/jira --json [scope]` 斜杠命令：client 在自己的会话上执行它，
+ * 再把 JSON 按 sprint 分组渲染。同一个操作只实现一次。
+ */
+window.__ModuleLoader__.load({
+  id: '@local/dsh-jira-work-overview',
+  factory(require) {
+    const React = require('react');
+    const h = React.createElement;
+    let createPortal;
+    try {
+      createPortal = require('react-dom')?.createPortal;
+    } catch {
+      createPortal = undefined;
+    }
+    // 虚拟列表：`@tanstack/react-virtual` 在基座模块表里（和 react / react-dom / zustand 同级），
+    // 直接 require 即可。理论上拿得到；真拿不到也不许崩 —— 退回「直接渲染全部行」并 warn 一次。
+    let useVirtualizer;
+    try {
+      useVirtualizer = require('@tanstack/react-virtual')?.useVirtualizer;
+    } catch {
+      useVirtualizer = undefined;
+    }
+    let virtualWarned = false;
+    /** 基座缺 @tanstack/react-virtual 时的替身：不做窗口裁剪，条目全给（等于旧行为）。 */
+    function fallbackVirtualizer(options) {
+      const count = Math.max(0, Number(options?.count) || 0);
+      const size = Math.max(1, Number(options?.estimateSize?.() ?? 32) || 32);
+      const items = [];
+      for (let index = 0; index < count; index += 1) items.push({ index, key: index, start: index * size, size });
+      return {
+        getTotalSize: () => count * size,
+        getVirtualItems: () => items,
+        measureElement: () => undefined,
+        scrollToIndex: () => undefined,
+      };
+    }
+
+    const NS = 'jira-work-overview';
+    const PLUGIN_ID = 'dsh-jira-work-overview';
+    const CSS_ID = `${PLUGIN_ID}/client.css`;
+    const ENTRY_ID = 'jira-work-overview';
+    // 插件列表里那一行自己的配置页要按 "<包名>#<patch 里的 row id>" 注册（plugin-manager 的 config-ledger 就是这么找的）。
+    const ROW_CONFIG_KEY = `${PLUGIN_ID}#${ENTRY_ID}`;
+    const SETTINGS_PATH = '/api/jira-work-overview/settings';
+    const PANEL_ID = 'jira-work-overview-panel';
+    const DEFAULT_SCOPE = 'all';
+    // 面板固定查「我的全部工作项」（`assignee = currentUser()`，含已完成 / 已关闭）。
+    // 范围分段控件（未完成 / 全部）已去掉（用户 2026-11-18）：查询范围不再是可选项，
+    // 用 tab 行右侧的状态筛选来收窄；命令行的默认范围仍是 open、后台监视仍只盯未完成
+    // —— 那是 host 侧的事（SCOPE_JQL.open），通知行为一个字都不改。
+    const PANEL_SCOPE = 'all';
+    // 条数上限的唯一口径（和 host 侧 index.js 的 LIMIT_MIN/MAX/DEFAULT 保持一致）。
+    // **0 = 不限制**：面板固定要 --limit=0（取到没有下一页为止，host 侧安全上限 5000 条 / 50 页）。
+    const LIMIT_MIN = 10;
+    const LIMIT_MAX = 5000;
+    const LIMIT_DEFAULT = 0;
+    // 虚拟列表：所有行都拍平成一维 entries 交给 @tanstack/react-virtual，只渲染视口内的行。
+    // 行高估算 32px；overscan 10 行；行高真被测量（状态菜单展开、换行）时由 measureElement 回填。
+    const ROW_ESTIMATE = 32;
+    const ROW_OVERSCAN = 10;
+
+    /** 条数语义的客户端归一化（与 host 侧 index.js 的 normalizeLimit 同步）：
+     *  **0 = 不限制**，正数 clamp 到 10–5000，其它（非法 / 负数）回落到 fallback。 */
+    function normalizeLimit(value, fallback = LIMIT_DEFAULT) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return fallback;
+      const whole = Math.floor(n);
+      if (whole === 0) return 0;
+      if (whole < 0) return fallback;
+      return Math.min(LIMIT_MAX, Math.max(LIMIT_MIN, whole));
+    }
+
+    const M = {
+      zh: {
+        title: 'Jira work overview',
+        loading: '读取中…',
+        empty: '没有匹配的工作项',
+        refresh: '刷新',
+        close: '关闭',
+        retry: '重试',
+        // 面板不再渲染「未完成 / 全部 / 当前迭代」——范围分段控件已去掉（用户 2026-11-18）；
+        // 这三个键保留：命令行 /jira 与后台监视（host 侧 SCOPE_JQL.open）仍在用同一套范围语义。
+        scopeOpen: '未完成',
+        scopeSprint: '当前迭代',
+        scopeAll: '全部',
+        projectAll: '全部项目',
+        scopeTotal: '共 {count} 项',
+        // 状态筛选（tab 行右侧的筛选按钮）。列表本身是虚拟列表，没有「正在渲染」进度了。
+        filterTitle: '筛选',
+        filterAll: '全部状态',
+        filterStatusPrefix: '· 状态 {name}',
+        projectTabs: '项目',
+        scrollLeft: '向左滚动',
+        scrollRight: '向右滚动',
+        expandAll: '展开全部',
+        collapseAll: '折叠全部',
+        openOfTotal: '未完成 {open} / 共 {total}',
+        allDone: '{total} 项全部完成',
+        totalItems: '共 {total} 项',
+        noSprint: '无迭代',
+        range: '{start} → {end}',
+        due: '到期 {date}',
+        overdue: '逾期 {date}',
+        updated: '更新 {date}',
+        generated: '读取于 {time}',
+        credentials: '凭据 {source}',
+        noChannel: '当前界面没有命令通道，无法执行 /jira。',
+        noSession: '先在左侧打开一个会话：命令需要在某个会话上执行。',
+        unknownCommand: '命令没有执行：/jira 未注册或语法不对。',
+        commandFailed: '命令执行失败',
+        untitled: '（无摘要）',
+        parent: '父 {key}',
+        watch: '实时监视中',
+        watchOff: '实时监视已关闭',
+        watchUnsupported: '实时监视不可用（{reason}）',
+        watchError: '实时监视断开：{message}',
+        watchUnread: '{count} 项新变化',
+        watchChecked: '检查于 {time}',
+        markRead: '标记已读',
+        changeNew: '{key} 新指派',
+        changeStatus: '{key} {from} → {to}',
+        changeClosed: '{key} 离开未完成列表',
+        setStatus: '改状态',
+        pickStatus: '选择新状态',
+        statusLoading: '读取可用状态…',
+        statusCurrent: '当前',
+        statusCancel: '取消',
+        statusChanged: '{key} 已改为 {status}',
+        statusFailed: '改状态失败：{message}',
+        credTitle: 'Jira 令牌',
+        credGroupToken: '认证令牌',
+        credGroupConnection: 'Jira 连接',
+        credGroupQuery: '查询',
+        credGroupWatch: '后台监视',
+        fBaseUrl: '服务地址',
+        fEmail: '账号邮箱',
+        fProject: '项目',
+        fBoard: '看板',
+        fMaxResults: '每次拉取条数（0 = 不限制）',
+        fTimeout: '请求超时',
+        watchEnabledLabel: '开启后台监视（有新指派 / 状态变化才知道）',
+        watchIntervalLabel: '检查间隔',
+        watchIntervalUnit: '秒',
+        watchIntervalHint: '默认 60 秒，最小 15 秒。开关和间隔都是改了就生效——立刻写入当前 profile 的 Cordis patch，下一次检查就按新值跑，不用重启 DSH。',
+        notifySwitchLabel: '变化时弹系统通知（macOS / Windows）',
+        watchSaving: '保存中…',
+        watchSaved: '监视设置已保存（写入 profile 的 Cordis patch）。',
+        watchSavedLocal: '监视设置已生效，但没能持久化：{reason}',
+        watchLoadFailed: '读取监视设置失败：{message}',
+        resultsLabel: '每次拉取条数',
+        resultsUnit: '条',
+        resultsHint: '每次拉取的条数：0 = 不限制（默认 0，一直翻页到没有下一页为止），正数范围 10–5000。面板固定按「不限制」拉取，再用虚拟列表只渲染视口内的行，所以这里不影响面板能不能显示完。',
+        uiTitle: '界面',
+        uiLanguageLabel: '界面语言',
+        uiAuto: '自动',
+        uiZh: '中文',
+        uiEn: 'English',
+        uiHint: '自动 = 先跟 DSH 的语言设置（设置 → 通用 → 语言），没设置时跟浏览器语言；Jira 返回的任务信息始终原样展示。改了就生效。',
+        loadMore: '加载更多',
+        loadedOf: '已加载 {count} 条（上限 {limit}）',
+        loadedAll: '已加载 {count} 条（全部）',
+        loadedCapped: '已加载 {count} 条（已达安全上限 {cap} 条，还有更多）',
+        loadMoreCap: '已到上限 {cap} 条',
+        loadMoreHint: '还有更多匹配的 issue（已达安全上限）；缩小 JQL 或调小查询范围再看。',
+        writableOff: '这个 profile 不支持持久化配置（没有 settings 服务）',
+        credSummarySet: '令牌已配置（{masked}）',
+        credSummaryMissing: '还没配置 Jira 令牌',
+        credCurrent: '当前令牌',
+        credNotSet: '未配置',
+        credSource: '来源：{source}',
+        credKeyLabel: '写入位置',
+        credKeyValue: 'DSH 凭据库的 {key}（位置不变）',
+        credInputLabel: '新令牌',
+        credEmailLabel: '账号邮箱',
+        credEmailHint: '令牌和邮箱是一对（Basic 认证 = 邮箱 + 令牌）：改邮箱会连令牌一起验证，通过了才写入。',
+        credPlaceholder: '粘贴新的 Jira API token',
+        credSave: '保存并验证',
+        credSaving: '保存中…',
+        credClear: '清除令牌',
+        credConfirmClear: '确认清除？',
+        credSaved: '已保存到 DSH 凭据库（{key}），立即生效',
+        credSavedEmail: '账号邮箱已更新为 {email}',
+        credSavedOffline: '已保存到 DSH 凭据库（{key}）；这次没能验证成功（{message}）',
+        credSavedAs: '已验证账号：{account}',
+        credCleared: '已从凭据库删除 {key}',
+        credLoadFailed: '读取令牌状态失败：{message}',
+        credSaveFailed: '保存失败：{message}',
+        credClearFailed: '删除失败：{message}',
+        credTokensLink: '在 Atlassian 里新建 / 吊销令牌',
+        credNote: '令牌只写进 DSH 凭据库，界面永远只显示打码首尾；换完立刻生效，不用重启 DSH。',
+        credOther: '其余配置（baseUrl、邮箱、监视间隔等）写在 profile 的 cordis.patch.yml 里；这个页面只改令牌。',
+        credOpen: '配置',
+        credClose: '收起令牌设置',
+        patchTitle: '配置文件',
+        patchPathLabel: 'cordis.patch.yml',
+        patchCopy: '复制路径',
+        patchCopied: '已复制路径',
+        patchCopyFailed: '复制失败，请手动选中路径',
+        patchOpen: '用默认程序打开',
+        patchChoose: '选择打开方式…',
+        patchReveal: '在文件管理器中显示',
+        patchHint: '这是当前 profile 的 Cordis patch 文件：本插件的 baseUrl / 邮箱 / 超时等配置写在这里。文件里也可能有其它插件的明文配置，注意别外发。',
+        patchMissingPath: '读不到 patch 文件路径（这台机器上没有 settings 服务）。',
+        patchMissingFile: '文件还不存在：写过一次配置之后它才会出现。',
+        patchOpened: '已交给系统打开',
+        patchChooseSent: '已弹出「打开方式」选择器，选完就会打开',
+        patchRevealed: '已在文件管理器中显示',
+        patchFailed: '打开失败：{message}',
+        patchEditors: '可用编辑器',
+        patchEditorPreferred: '（上次用过）',
+        patchNoEditors: '没有探测到已安装的编辑器',
+        patchCustomLabel: '用指定应用打开',
+        patchCustomPlaceholder: '应用名或完整路径（例如 Code.exe）',
+        patchCustomOpen: '打开',
+        patchOpenedApp: '已交给 {app} 打开',
+      },
+      en: {
+        title: 'My Jira work items',
+        loading: 'Loading…',
+        empty: 'No matching work items',
+        refresh: 'Refresh',
+        close: 'Close',
+        retry: 'Retry',
+        // The panel no longer renders Open / All / Sprint (the scope segment is gone, 2026-11-18);
+        // kept because /jira and the background watcher (host-side SCOPE_JQL.open) still use these labels.
+        scopeOpen: 'Open',
+        scopeSprint: 'Sprint',
+        scopeAll: 'All',
+        projectAll: 'All projects',
+        scopeTotal: '{count} items',
+        // Status filter (the button at the right of the tab row) and the progressive-render hint.
+        filterTitle: 'Filter',
+        filterAll: 'All statuses',
+        filterStatusPrefix: '· status {name}',
+        projectTabs: 'Projects',
+        scrollLeft: 'Scroll left',
+        scrollRight: 'Scroll right',
+        expandAll: 'Expand all',
+        collapseAll: 'Collapse all',
+        openOfTotal: '{open} open / {total} total',
+        allDone: '{total} done',
+        totalItems: '{total} items',
+        noSprint: 'No sprint',
+        range: '{start} → {end}',
+        due: 'due {date}',
+        overdue: 'overdue {date}',
+        updated: 'updated {date}',
+        generated: 'read at {time}',
+        credentials: 'via {source}',
+        noChannel: 'No command channel in this UI: cannot run /jira.',
+        noSession: 'Open a session first: the command must run on one.',
+        unknownCommand: 'Command did not run: /jira unregistered or malformed.',
+        commandFailed: 'Command failed',
+        untitled: '(no summary)',
+        parent: 'parent {key}',
+        watch: 'Live watch on',
+        watchOff: 'Live watch off',
+        watchUnsupported: 'Live watch unavailable ({reason})',
+        watchError: 'Live watch disconnected: {message}',
+        watchUnread: '{count} new changes',
+        watchChecked: 'checked {time}',
+        markRead: 'Mark read',
+        changeNew: '{key} newly assigned',
+        changeStatus: '{key} {from} → {to}',
+        changeClosed: '{key} left the open list',
+        setStatus: 'Change status',
+        pickStatus: 'Set status',
+        statusLoading: 'Loading available statuses…',
+        statusCurrent: 'current',
+        statusCancel: 'Cancel',
+        statusChanged: '{key} is now {status}',
+        statusFailed: 'Status change failed: {message}',
+        credTitle: 'Jira token',
+        credGroupToken: 'Authentication token',
+        credGroupConnection: 'Jira connection',
+        credGroupQuery: 'Query',
+        credGroupWatch: 'Background watch',
+        fBaseUrl: 'Base URL',
+        fEmail: 'Account email',
+        fProject: 'Project',
+        fBoard: 'Board',
+        fMaxResults: 'Results per fetch (0 = unlimited)',
+        fTimeout: 'Request timeout',
+        watchEnabledLabel: 'Watch in the background (learn about new assignments / status changes)',
+        watchIntervalLabel: 'Check every',
+        watchIntervalUnit: 's',
+        watchIntervalHint: 'Default 60 s, minimum 15 s. Both switches and this interval apply as soon as you change them: written straight to the active profile\'s Cordis patch, no DSH restart needed.',
+        notifySwitchLabel: 'Show a system notification on changes',
+        watchSaving: 'Saving…',
+        watchSaved: 'Watch settings saved (written to the profile Cordis patch).',
+        watchSavedLocal: 'Watch settings applied but not persisted: {reason}',
+        watchLoadFailed: 'Could not read watch settings: {message}',
+        resultsLabel: 'Results per fetch',
+        resultsUnit: 'items',
+        resultsHint: 'Items fetched per query: 0 = unlimited (the default, pages until there is no next page), a positive value ranges 10-5000. The panel always fetches with "unlimited" and renders only the rows in view via a virtual list, so this value does not limit the panel.',
+        uiTitle: 'Interface',
+        uiLanguageLabel: 'Language',
+        uiAuto: 'Automatic',
+        uiZh: '中文',
+        uiEn: 'English',
+        uiHint: 'Automatic follows the DSH language setting (Settings → General → Language), or your browser language when none is set. Jira-returned task data is always shown verbatim, and changes apply immediately.',
+        loadMore: 'Load more',
+        loadedOf: 'Loaded {count} of {limit}',
+        loadedAll: 'Loaded {count} (all)',
+        loadedCapped: 'Loaded {count} (safety cap {cap} reached, more available)',
+        loadMoreCap: 'Reached the {cap}-item cap',
+        loadMoreHint: 'More matching issues exist (the safety cap was reached); narrow the JQL or the query scope.',
+        writableOff: 'This profile cannot persist configuration (no settings service)',
+        credSummarySet: 'Token configured ({masked})',
+        credSummaryMissing: 'No Jira token configured yet',
+        credCurrent: 'Current token',
+        credNotSet: 'not configured',
+        credSource: 'Source: {source}',
+        credKeyLabel: 'Stored at',
+        credKeyValue: 'the DSH credential store key {key} (unchanged)',
+        credInputLabel: 'New token',
+        credEmailLabel: 'Account email',
+        credEmailHint: 'The token and the email are one pair (Basic auth = email + token): changing the email re-verifies the pair before writing.',
+        credPlaceholder: 'Paste a new Jira API token',
+        credSave: 'Save & verify',
+        credSaving: 'Saving…',
+        credClear: 'Clear token',
+        credConfirmClear: 'Clear it?',
+        credSaved: 'Saved to the DSH credential store ({key}); effective immediately',
+        credSavedEmail: 'Account email updated to {email}',
+        credSavedOffline: 'Saved to the DSH credential store ({key}); verification failed this time ({message})',
+        credSavedAs: 'Verified account: {account}',
+        credCleared: 'Removed {key} from the credential store',
+        credLoadFailed: 'Reading the token state failed: {message}',
+        credSaveFailed: 'Saving failed: {message}',
+        credClearFailed: 'Removing failed: {message}',
+        credTokensLink: 'Create or revoke tokens at Atlassian',
+        credNote: 'The token goes into the DSH credential store only, and the UI ever shows the masked head and tail; a saved token takes effect at once, no restart needed.',
+        credOther: 'The rest of the configuration (baseUrl, email, watch interval…) lives in the profile\'s cordis.patch.yml; this page only changes the token.',
+        credOpen: 'Configure',
+        credClose: 'Hide token settings',
+        patchTitle: 'Configuration file',
+        patchPathLabel: 'cordis.patch.yml',
+        patchCopy: 'Copy path',
+        patchCopied: 'Path copied',
+        patchCopyFailed: 'Copy failed — select the path manually',
+        patchOpen: 'Open with default app',
+        patchChoose: 'Choose an app…',
+        patchReveal: 'Show in file manager',
+        patchHint: 'This is the Cordis patch file of the current profile: this plugin\'s baseUrl / email / timeout settings live here. It may also contain other plugins\' plaintext configuration, so do not send it around.',
+        patchMissingPath: 'The patch file path is unavailable (no settings service on this machine).',
+        patchMissingFile: 'The file does not exist yet: it appears after the first write.',
+        patchOpened: 'Handed over to the system',
+        patchChooseSent: 'The "Open with" chooser is up — it opens once you pick an app',
+        patchRevealed: 'Shown in the file manager',
+        patchFailed: 'Could not open it: {message}',
+        patchEditors: 'Available editors',
+        patchEditorPreferred: '(used last time)',
+        patchNoEditors: 'No installed editor was detected',
+        patchCustomLabel: 'Open with a specific app',
+        patchCustomPlaceholder: 'App name or full path (for example Code.exe)',
+        patchCustomOpen: 'Open',
+        patchOpenedApp: 'Handed over to {app}',
+      },
+    };
+
+    // 语言只支持 zh / en；任何 tag（zh-CN、zh-Hans、en-GB…）都归一化，认不出来当英文。
+    function matchLanguage(tag) {
+      if (typeof tag !== 'string') return '';
+      const value = tag.trim().toLowerCase();
+      if (value.startsWith('zh')) return 'zh';
+      if (value.startsWith('en')) return 'en';
+      return '';
+    }
+
+    // 浏览器兜底：先按有序的完整语言列表（navigator.languages）找，再退回 navigator.language。
+    function browserLanguage() {
+      if (typeof navigator === 'undefined') return 'en';
+      const tags = Array.isArray(navigator.languages) && navigator.languages.length > 0
+        ? navigator.languages
+        : [navigator.language];
+      for (const tag of tags) {
+        const hit = matchLanguage(tag);
+        if (hit) return hit;
+      }
+      return 'en';
+    }
+
+    // 当前语言：DSH 的语言服务（设置 → 通用 → 语言）优先，拿不到才看浏览器。
+    let lang = browserLanguage();
+    let hostLocale;
+
+    function currentLanguage() {
+      return lang;
+    }
+
+    function setLanguage(tag) {
+      const next = matchLanguage(tag);
+      if (!next || next === lang) return;
+      lang = next;
+      // 语言换了要让面板里的文案立刻跟着换（订阅者会重渲染）。
+      for (const listener of [...listeners]) listener();
+    }
+
+    function t(key, params) {
+      if (hostLocale) {
+        const value = hostLocale(key, params);
+        if (value !== undefined && value !== null && value !== key) return String(value);
+      }
+      let text = M[lang][key] ?? M.zh[key] ?? key;
+      if (params) {
+        for (const [name, value] of Object.entries(params)) text = text.split(`{${name}}`).join(String(value));
+      }
+      return text;
+    }
+
+    function formatTime(value) {
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return String(value ?? '-');
+      const pad = (part) => String(part).padStart(2, '0');
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    }
+
+    /* ---------------------------------------------------------------- 状态 */
+
+    const snapshot = {
+      open: false,
+      credOpen: false,
+      project: 'ALL',
+      loading: false,
+      error: '',
+      scope: DEFAULT_SCOPE,
+      data: null,
+      collapsed: {},
+      watch: null,
+      // 条数不再进 snapshot：面板固定按「不限制」拉取，host 自己以 5000 条 / 50 页 / 30s 兜底。
+      // 状态筛选（单选，空串 = 全部状态）与筛选菜单开关。
+      status: '',
+      filterOpen: false,
+      // 改状态：哪一行的下拉开着、该行读到的可用流转、正在写入的 key、一次性提示文案。
+      menuKey: '',
+      statuses: {},
+      busyKey: '',
+      flash: '',
+    };
+    const listeners = new Set();
+    const runtime = { ctx: null };
+
+    function patch(next) {
+      Object.assign(snapshot, next);
+      for (const listener of [...listeners]) listener();
+    }
+
+    function useSnapshot() {
+      const [value, setValue] = React.useState(snapshot);
+      React.useEffect(() => {
+        const update = () => setValue({ ...snapshot });
+        listeners.add(update);
+        update();
+        return () => listeners.delete(update);
+      }, []);
+      return value;
+    }
+
+    function groupCollapsed(scope, group) {
+      const key = `${scope}:${group.key}`;
+      if (Object.prototype.hasOwnProperty.call(snapshot.collapsed, key)) return Boolean(snapshot.collapsed[key]);
+      return group.items.length > 0 && group.items.every((item) => item.category === 'done');
+    }
+
+    function setGroupCollapsed(scope, group, value) {
+      patch({ collapsed: { ...snapshot.collapsed, [`${scope}:${group.key}`]: value } });
+    }
+
+    function setAllCollapsed(scope, groups, value) {
+      const next = { ...snapshot.collapsed };
+      for (const group of groups) next[`${scope}:${group.key}`] = value;
+      patch({ collapsed: next });
+    }
+
+    /* ------------------------------------------------------------ 数据通道 */
+
+    function resolveCommands() {
+      const ctx = runtime.ctx;
+      if (!ctx) return undefined;
+      const viaGet = typeof ctx.get === 'function' ? ctx.get('remote.commands') : undefined;
+      return viaGet ?? ctx.remote?.commands;
+    }
+
+    function currentSessionId() {
+      const ctx = runtime.ctx;
+      if (!ctx) return undefined;
+      const sessions = typeof ctx.get === 'function' ? ctx.get('sessions') : undefined;
+      try {
+        const byId = sessions?.list?.getSnapshot?.()?.byId;
+        const rows = byId && typeof byId === 'object' ? Object.values(byId) : [];
+        if (rows.length === 0) return undefined;
+        const main = rows.find((row) => ((row?.retainedBy?.mainView ?? 0) > 0));
+        return (main ?? rows[rows.length - 1])?.id;
+      } catch {
+        return undefined;
+      }
+    }
+
+    /* ------------------------------------------------------ 实时角标通道 */
+    //
+    // 不走斜杠命令：每次命令执行都会往会话里写 command/run + command/done，拿它轮询会把聊天记录刷爆。
+    // 改走 host 在 connection.fetch 上注册的精确路由（GET=状态 / 长轮询，POST=标记已读）。
+    // Electron 里前端是 file://，必须经壳的 transport 转发；浏览器里退回普通 fetch。
+
+    const WATCH_PATH = '/api/jira-work-overview/state';
+    const WATCH_WAIT_MS = 25000;
+    // 面板里改状态走 Host 的写通道（GET 列可用流转 / POST 执行流转）。
+    const TRANSITION_PATH = '/api/jira-work-overview/transition';
+    // 配置页里换令牌走的通道：GET 打码状态、POST 保存/清除（Host 侧仍写同一个凭据库键）。
+    const CREDENTIAL_PATH = '/api/jira-work-overview/credential';
+    const TOKENS_URL = 'https://id.atlassian.com/manage-profile/security/api-tokens';
+    const watch = { stopped: true, controller: null };
+
+    /**
+     * 发一个请求到角标路由。Electron 里前端跑在 file:// 上，相对路径只会打到 file:///api/…，
+     * 所以优先走壳提供的 transport（它负责把 /api 请求经 IPC 桥转给 Host）；transport 没有或
+     * 抛错时，再用页面自己的 fetch 试绝对地址（浏览器里 dsh web 就是这一条路）。
+     */
+    // host 半边的文案是它自己渲染的：每次请求都把当前语言捎过去（?lang=zh|en）。
+    function withLanguage(path) {
+      const value = typeof path === 'string' ? path : String(path);
+      const marker = value.includes('?') ? '&' : '?';
+      return `${value}${marker}lang=${encodeURIComponent(currentLanguage())}`;
+    }
+
+    async function watchFetch(path, init) {
+      const url = withLanguage(path);
+      const transport = typeof window !== 'undefined' ? window.__DSH_TRANSPORT__ : undefined;
+      const viaTransport = typeof transport?.fetch === 'function' ? transport.fetch.bind(transport) : undefined;
+      const viaFetch = typeof fetch === 'function' ? fetch.bind(globalThis) : undefined;
+      const origin = typeof location !== 'undefined' && /^https?:/i.test(location?.origin ?? '') ? location.origin : '';
+      const attempts = [];
+      if (viaTransport) attempts.push(() => viaTransport(url, init));
+      if (viaFetch) attempts.push(() => viaFetch(`${origin}${url}`, init));
+      if (attempts.length === 0) throw new Error(t('watchUnsupported', { reason: 'no fetch' }));
+      let last;
+      for (const attempt of attempts) {
+        try {
+          return await attempt();
+        } catch (error) {
+          last = error;
+        }
+      }
+      throw last;
+    }
+
+    function patchWatch(next) {
+      const base = snapshot.watch && typeof snapshot.watch === 'object' ? snapshot.watch : {};
+      patch({ watch: { ...base, ...next } });
+    }
+
+    function sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    function describeChange(change) {
+      if (!change || typeof change !== 'object') return '';
+      if (change.kind === 'new') return t('changeNew', { key: change.key });
+      if (change.kind === 'status') {
+        return t('changeStatus', { key: change.key, from: change.from ?? '—', to: change.to ?? '—' });
+      }
+      return t('changeClosed', { key: change.key });
+    }
+
+    async function watchLoop() {
+      let failures = 0;
+      while (!watch.stopped) {
+        const controller = typeof AbortController === 'function' ? new AbortController() : undefined;
+        watch.controller = controller;
+        try {
+          const response = await watchFetch(`${WATCH_PATH}?wait=${WATCH_WAIT_MS}`, {
+            method: 'GET',
+            headers: { accept: 'application/json' },
+            signal: controller?.signal,
+          });
+          // 通道不存在（老宿主 / 没注册成功）就别再重试了，面板里说明一下即可。
+          if (response.status === 403 || response.status === 404 || response.status === 405) {
+            patchWatch({ supported: false, reason: `HTTP ${response.status}` });
+            return;
+          }
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const payload = await response.json();
+          const incoming = payload?.watch ?? null;
+          const before = snapshot.watch?.counts?.total ?? 0;
+          failures = 0;
+          patchWatch({ supported: true, reason: '', error: '', failures: 0, ...(incoming ?? {}) });
+          const total = incoming?.counts?.total ?? 0;
+          // 面板开着、且这次真的多了未读变化，就顺手把列表刷成新的。
+          if (snapshot.open && before > 0 && total > before && !snapshot.loading) load(snapshot.scope);
+        } catch (error) {
+          if (watch.stopped || watch.controller !== controller) break;
+          failures += 1;
+          patchWatch({ supported: true, error: String(error?.message ?? error), failures });
+          await sleep(Math.min(30000, 4000 * failures));
+        }
+      }
+    }
+
+    function startWatchLoop(ctx) {
+      watch.stopped = false;
+      const start = () => {
+        void watchLoop();
+      };
+      const stop = () => {
+        watch.stopped = true;
+        watch.controller?.abort?.();
+      };
+      if (typeof ctx?.effect === 'function') {
+        try {
+          ctx.effect(() => {
+            start();
+            return stop;
+          }, 'jira-work-overview: watch loop');
+          return;
+        } catch {
+          /* 落到下面的直接启动 */
+        }
+      }
+      start();
+    }
+
+    async function markWatchRead() {
+      try {
+        const response = await watchFetch(WATCH_PATH, { method: 'POST', headers: { accept: 'application/json' } });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json();
+        patchWatch({
+          supported: true,
+          error: '',
+          ...(payload?.watch ?? {}),
+          counts: { new: 0, status: 0, closed: 0, total: 0 },
+          changes: [],
+        });
+      } catch (error) {
+        patchWatch({ error: String(error?.message ?? error) });
+      }
+    }
+
+    /* ------------------------------------------------------ 改状态（写操作） */
+
+    let flashTimer;
+
+    /** 顶部的一次性绿色提示（例如「APP-4051 已改为 IN QA」），几秒后自己消失。 */
+    function flash(text) {
+      patch({ flash: text });
+      if (flashTimer) clearTimeout(flashTimer);
+      flashTimer = setTimeout(() => patch({ flash: '' }), 6000);
+      if (flashTimer && typeof flashTimer.unref === 'function') flashTimer.unref();
+    }
+
+    function patchStatuses(key, next) {
+      const base = snapshot.statuses[key] && typeof snapshot.statuses[key] === 'object' ? snapshot.statuses[key] : {};
+      patch({ statuses: { ...snapshot.statuses, [key]: { ...base, ...next } } });
+    }
+
+    function toggleStatusMenu(key) {
+      if (snapshot.menuKey === key) {
+        patch({ menuKey: '' });
+        return;
+      }
+      patch({ menuKey: key });
+      void loadStatuses(key);
+    }
+
+    /** Jira 只允许工作流定义的流转，所以下拉列表现问 Host（GET 精确路由）。 */
+    async function loadStatuses(key) {
+      const cached = snapshot.statuses[key];
+      if (cached?.list || cached?.loading) return;
+      patchStatuses(key, { loading: true, error: '' });
+      try {
+        const response = await watchFetch(`${TRANSITION_PATH}?key=${encodeURIComponent(key)}`, {
+          method: 'GET',
+          headers: { accept: 'application/json' },
+        });
+        const payload = await response.json().catch(() => null);
+        if (payload?.ok !== true) throw new Error(payload?.error || `HTTP ${response.status}`);
+        patchStatuses(key, {
+          loading: false,
+          current: payload.current,
+          list: Array.isArray(payload.transitions) ? payload.transitions : [],
+        });
+      } catch (error) {
+        patchStatuses(key, { loading: false, error: t('statusFailed', { message: String(error?.message ?? error) }) });
+      }
+    }
+
+    async function applyStatus(key, row) {
+      patch({ busyKey: key });
+      patchStatuses(key, { error: '' });
+      try {
+        const response = await watchFetch(TRANSITION_PATH, {
+          method: 'POST',
+          headers: { accept: 'application/json', 'content-type': 'application/json' },
+          body: JSON.stringify({ key, transitionId: row.id }),
+        });
+        const payload = await response.json().catch(() => null);
+        if (payload?.ok !== true) throw new Error(payload?.error || `HTTP ${response.status}`);
+        // 状态变了，分组/排序都会变：清掉流转缓存、关掉下拉、重新拉列表。
+        patch({ menuKey: '', busyKey: '', statuses: {} });
+        flash(t('statusChanged', { key, status: payload.status || row.to }));
+        await load(snapshot.scope);
+      } catch (error) {
+        patchStatuses(key, { error: t('statusFailed', { message: String(error?.message ?? error) }) });
+        patch({ busyKey: '' });
+      }
+    }
+
+    /*
+     * 切换范围时把上一次还没回来的请求作废：
+     * ① 序号对不上就直接丢结果（旧响应晚到也绝不会覆盖新列表）；
+     * ② 同时 abort 掉等待中的远端调用，不再白等。
+     * 注意 abort 只能中断「等结果」，Host 那边已经发出的 Jira 查询没法撤回——重要的是
+     * 界面只认最后一次请求的数据，切换 tab 时列表是原子替换，不会先闪一下旧范围的内容。
+     */
+    let loadSeq = 0;
+    let loadController = null;
+
+    function cancelLoad() {
+      loadSeq += 1;
+      const controller = loadController;
+      loadController = null;
+      if (controller) {
+        try { controller.abort(); } catch { /* ignore */ }
+      }
+      return loadSeq;
+    }
+
+    /**
+     * 面板的数据通道：范围固定 all（含已完成 / 已关闭），条数**固定 --limit=0 = 不限制**
+     * ——host 会一直翻页到没有下一页，只受它自己的安全上限（5000 条 / 50 页 / 30s）约束。
+     * 条数不再是面板的功能开关，所以这里不吃 limit 参数（「加载更多」只在 host 真截断时出现）。
+     */
+    async function load(scope) {
+      const next = scope || snapshot.scope;
+      const commands = resolveCommands();
+      if (!commands || typeof commands.execute !== 'function') {
+        cancelLoad();
+        patch({ loading: false, scope: next, error: t('noChannel') });
+        return;
+      }
+      const sessionId = currentSessionId();
+      if (!sessionId) {
+        cancelLoad();
+        patch({ loading: false, scope: next, error: t('noSession') });
+        return;
+      }
+      const seq = cancelLoad();
+      const controller = typeof AbortController === 'function' ? new AbortController() : undefined;
+      loadController = controller;
+      patch({ loading: true, error: '', scope: next });
+      try {
+        // host 的 i18n 已落地：命令面也把界面语言捎过去，否则 host 渲染的文案会跟面板不一致。
+        // 面板固定发 scope（all，含已完成/已关闭）；`--status=` 是单选状态筛选，空串表示不筛。
+        const status = typeof snapshot.status === 'string' ? snapshot.status : '';
+        const line = `/jira --json ${next} --limit=0${status ? ` --status=${status}` : ''} --lang=${currentLanguage()}`;
+        const result = await commands.execute(sessionId, line, [], controller?.signal);
+        if (seq !== loadSeq) return;
+        if (!result || result.ok !== true) {
+          const code = result?.error?.code ?? '-';
+          const message = result?.error?.message ?? '-';
+          throw new Error(`${t('commandFailed')}: ${code}: ${message}`);
+        }
+        if (result.value === undefined) throw new Error(t('unknownCommand'));
+        const outcome = result.value.result;
+        if (!outcome || outcome.kind !== 'success') throw new Error(outcome?.text || t('commandFailed'));
+        const data = JSON.parse(outcome.text);
+        patch({ data, error: '', loading: false });
+      } catch (error) {
+        if (seq !== loadSeq) return; // 被新请求取代 / 主动取消：不当成错误显示
+        patch({ error: String(error?.message ?? error), loading: false });
+      } finally {
+        if (loadController === controller) loadController = null;
+      }
+    }
+
+    /* -------------------------------------------------------------- 分组 */
+
+    function fallbackGroups(items) {
+      const bySprint = new Map();
+      for (const item of items) {
+        const id = item.sprintId === null || item.sprintId === undefined ? 'none' : String(item.sprintId);
+        if (!bySprint.has(id)) {
+          bySprint.set(id, {
+            id: id === 'none' ? null : id,
+            name: item.sprint || t('noSprint'),
+            state: item.sprintState || '',
+            start: item.sprintStart || '',
+            end: item.sprintEnd || '',
+            keys: [],
+          });
+        }
+        bySprint.get(id).keys.push(item.key);
+      }
+      // 与 host 一致：只按 sprint id 从新到旧，无迭代垫底，不看 active（它跟实际安排对不上）。
+      return [...bySprint.values()].sort((left, right) => {
+        if ((left.id === null) !== (right.id === null)) return left.id === null ? 1 : -1;
+        return Number(right.id ?? 0) - Number(left.id ?? 0);
+      });
+    }
+
+    // 结果里出现的项目（key 前缀就是项目键），按条数从多到少排；「全部」永远排第一。
+    function projectTabs(data) {
+      const items = Array.isArray(data?.items) ? data.items : [];
+      const counts = new Map();
+      for (const item of items) {
+        const key = item.project || String(item.key ?? '').split('-')[0] || '—';
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
+      const rows = [...counts.entries()]
+        .map(([key, count]) => ({ key, count }))
+        .sort((a, b) => (b.count - a.count) || a.key.localeCompare(b.key));
+      return [{ key: 'ALL', count: items.length }, ...rows];
+    }
+
+    // 只看某个项目时，item 上的 project（key 前缀）就是要过滤的键。
+    function projectItems(data, project) {
+      const items = Array.isArray(data?.items) ? data.items : [];
+      if (!project || project === 'ALL') return items;
+      return items.filter((item) => (item.project || String(item.key ?? '').split('-')[0]) === project);
+    }
+
+    function buildGroups(data, project) {
+      if (!data || !Array.isArray(data.items)) return [];
+      const wanted = !project || project === 'ALL' ? '' : project;
+      const visible = projectItems(data, project);
+      const byKey = new Map(visible.map((item) => [item.key, item]));
+      // host 给的 sprints 是按「全部项目」算的，切到单个项目时成员表会对不上，
+      // 所以只在看「全部」时复用它，否则就地从可见条目重算（字段都在 item 上）。
+      const raw = !wanted && Array.isArray(data.sprints) && data.sprints.length > 0
+        ? data.sprints
+        : fallbackGroups(visible);
+      return raw
+        .map((group) => {
+          const items = (group.keys ?? []).map((key) => byKey.get(key)).filter(Boolean);
+          const counts = group.counts ?? {
+            new: items.filter((item) => item.category === 'new').length,
+            indeterminate: items.filter((item) => item.category === 'indeterminate').length,
+            done: items.filter((item) => item.category === 'done').length,
+            total: items.length,
+          };
+          return {
+            key: group.id === null || group.id === undefined ? 'none' : String(group.id),
+            id: group.id ?? null,
+            name: group.name || t('noSprint'),
+            state: group.state || '',
+            start: group.start || '',
+            end: group.end || '',
+            active: Boolean(group.active) || group.state === 'active',
+            items,
+            counts,
+          };
+        })
+        .filter((group) => group.items.length > 0);
+    }
+
+    /* -------------------------------------------------------------- 样式 */
+
+    const CSS = `
+.jmw-mask{position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;padding:24px;
+  background:var(--dsw-alias-bg-mask-1,rgba(0,0,0,.24));backdrop-filter:blur(2px)}
+.jmw-card{display:flex;flex-direction:column;width:min(780px,100%);max-height:min(82vh,760px);overflow:hidden;
+  color:var(--dsw-alias-label-primary,#1b1d22);background:var(--dsw-alias-bg-layer-2,#fff);
+  border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.1));border-radius:var(--dsw-radius-lg,16px);
+  box-shadow:var(--dsw-elevation-prominent,0 18px 48px rgba(0,0,0,.24));
+  font-family:var(--dsw-font-family,system-ui,-apple-system,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif);font-size:13px;line-height:1.5}
+.jmw-head{display:flex;align-items:center;gap:12px;padding:16px 18px 14px}
+.jmw-glyph{flex:none;width:32px;height:32px;border-radius:var(--dsw-radius-sm,8px);
+  background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06));padding:2px}
+.jmw-headtext{flex:1;min-width:0}
+.jmw-title{font-size:15px;font-weight:600;letter-spacing:.1px}
+.jmw-sub{margin-top:2px;font-size:12px;color:var(--dsw-alias-label-tertiary,#8a8f99);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.jmw-iconbtn{flex:none;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;
+  color:var(--dsw-alias-label-secondary,#5c6270);background:transparent;border:0;border-radius:var(--dsw-radius-sm,8px);cursor:pointer}
+.jmw-iconbtn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06));color:var(--dsw-alias-label-primary,#1b1d22)}
+.jmw-iconbtn:disabled{opacity:.4;cursor:default}
+/* 状态筛选按钮（tab 行右侧）。
+   范围分段控件（.jmw-seg）和它旁边的总数（.jmw-total）连同 .jmw-bar 整行已删（用户 2026-11-18）。 */
+.jmw-filterbtn{flex:none;display:inline-flex;align-items:center;gap:4px;padding:3px 9px;font:inherit;font-size:11.5px;
+  cursor:pointer;border-radius:999px;white-space:nowrap;
+  color:var(--dsw-alias-label-secondary,#5c6270);background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06));
+  border:1px solid transparent}
+.jmw-filterbtn:hover{border-color:var(--dsw-alias-border-l2,rgba(38,49,72,.18))}
+.jmw-filterbtn.on{border-color:var(--dsw-alias-border-l2,rgba(38,49,72,.18))}
+.jmw-filterbtn.set{color:#ffffff;background:#4d6bfe;border-color:#4d6bfe}
+/* 虚拟列表（@tanstack/react-virtual）：.jmw-vlist 的高度 = getTotalSize()，每个 .jmw-vrow 用
+   translateY(start) 绝对定位；DOM 里只有视口内的行 + overscan。组头 / 任务行 / 空态都是这里的一行。 */
+.jmw-vlist{position:relative;width:100%}
+.jmw-vrow{position:absolute;top:0;left:0;width:100%}
+.jmw-linkbtn{margin-left:auto;padding:3px 8px;font:inherit;font-size:12px;color:var(--dsw-alias-label-tertiary,#8a8f99);
+  background:transparent;border:0;border-radius:6px;cursor:pointer}
+.jmw-linkbtn:hover{color:var(--dsw-alias-label-primary,#1b1d22);background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06))}
+/* 项目切换：横向滚动的 tab 条 + 左右箭头（项目多了也能翻） */
+.jmw-projects{display:flex;align-items:center;gap:6px;padding:0 18px 10px}
+.jmw-scrollbtn{flex:none;width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;padding:0;
+  font:inherit;font-size:14px;line-height:1;cursor:pointer;border-radius:var(--dsw-radius-sm,8px);
+  color:var(--dsw-alias-label-secondary,#5c6270);background:transparent;
+  border:1px solid var(--dsw-alias-border-l1,rgba(38,49,72,.1))}
+.jmw-scrollbtn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06))}
+.jmw-scrollbtn:disabled{opacity:.4;cursor:default}
+.jmw-projectstrip{flex:1;min-width:0;display:flex;gap:6px;overflow-x:auto;scroll-behavior:smooth;padding:2px 0;scrollbar-width:thin}
+.jmw-projectstrip::-webkit-scrollbar{height:5px}
+.jmw-projectstrip::-webkit-scrollbar-thumb{background:var(--dsw-alias-scrollbar-bg-l2,rgba(0,0,0,.18));border-radius:3px}
+.jmw-pill{flex:none;display:inline-flex;align-items:center;gap:5px;padding:3px 10px;font:inherit;font-size:11.5px;
+  cursor:pointer;border-radius:999px;white-space:nowrap;
+  color:var(--dsw-alias-label-secondary,#5c6270);background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06));
+  border:1px solid transparent}
+.jmw-pill:hover{border-color:var(--dsw-alias-border-l2,rgba(38,49,72,.18))}
+.jmw-pill.on{color:#ffffff;background:#4d6bfe;border-color:#4d6bfe}
+.jmw-body{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:6px 0 8px;
+  --dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2,rgba(0,0,0,.18));
+  --dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-bg-hover-l2,rgba(0,0,0,.3));scrollbar-width:thin}
+.jmw-body.pending{opacity:.55}
+.jmw-body{transition:opacity .12s ease}
+.jmw-group{ border-top:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.04))}
+.jmw-group:first-child{border-top:0}
+.jmw-grouphead{display:flex;align-items:center;gap:8px;width:100%;padding:10px 18px;font:inherit;text-align:left;
+  color:inherit;background:transparent;border:0;cursor:pointer}
+.jmw-grouphead:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06))}
+.jmw-chev{flex:none;width:14px;height:14px;color:var(--dsw-alias-label-tertiary,#8a8f99);transition:transform .15s ease}
+.jmw-chev.open{transform:rotate(90deg)}
+.jmw-sprint{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.jmw-chip{flex:none;padding:1px 7px;font-size:11px;border-radius:999px;color:var(--dsw-alias-label-secondary,#5c6270);
+  border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.12))}
+.jmw-chip.live{color:var(--dsw-alias-state-success-primary,#1f8f4e);border-color:currentColor}
+.jmw-count{margin-left:auto;flex:none;padding-left:10px;font-size:12px;color:var(--dsw-alias-label-tertiary,#8a8f99)}
+.jmw-count b{font-weight:600;color:var(--dsw-alias-label-secondary,#5c6270)}
+.jmw-meta-line{padding:0 18px 8px 40px;font-size:11px;color:var(--dsw-alias-label-caption,var(--dsw-alias-label-tertiary,#8a8f99));
+  display:flex;gap:8px;flex-wrap:wrap}
+.jmw-rows{padding:0 0 4px}
+.jmw-row{display:flex;align-items:center;gap:9px;padding:6px 18px 6px 40px;color:inherit;text-decoration:none;flex-wrap:wrap}
+.jmw-row:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06))}
+.jmw-row.open{background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06))}
+/* 高优先级整行底色：High 琥珀、Highest 红，越红越浓对比度越强；左侧竖条让色阶不靠颜色也分得清 */
+.jmw-row.pri-high{background:color-mix(in srgb,var(--dsw-alias-state-warn-primary,#d9a10b) 10%,transparent);
+  box-shadow:inset 3px 0 0 color-mix(in srgb,var(--dsw-alias-state-warn-primary,#d9a10b) 75%,transparent)}
+.jmw-row.pri-highest{background:color-mix(in srgb,var(--dsw-alias-state-error-primary,#d64545) 16%,transparent);
+  box-shadow:inset 3px 0 0 var(--dsw-alias-state-error-primary,#d64545)}
+.jmw-row.pri-high:hover{background:color-mix(in srgb,var(--dsw-alias-state-warn-primary,#d9a10b) 17%,transparent)}
+.jmw-row.pri-highest:hover{background:color-mix(in srgb,var(--dsw-alias-state-error-primary,#d64545) 24%,transparent)}
+.jmw-row.pri-high.open{background:color-mix(in srgb,var(--dsw-alias-state-warn-primary,#d9a10b) 20%,transparent)}
+.jmw-row.pri-highest.open{background:color-mix(in srgb,var(--dsw-alias-state-error-primary,#d64545) 28%,transparent)}
+/* 已完成的行弱化一档，别跟还没做的抢注意力 */
+.jmw-row.done.pri-high{background:color-mix(in srgb,var(--dsw-alias-state-warn-primary,#d9a10b) 5%,transparent)}
+.jmw-row.done.pri-highest{background:color-mix(in srgb,var(--dsw-alias-state-error-primary,#d64545) 8%,transparent)}
+.jmw-main{display:flex;align-items:center;gap:9px;flex:1;min-width:0;color:inherit;text-decoration:none}
+.jmw-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--dsw-alias-label-tertiary,#8a8f99)}
+.jmw-dot.new{background:var(--dsw-alias-state-idle-primary,#8a94a6)}
+.jmw-dot.indeterminate{background:var(--dsw-alias-state-warn-primary,#d9a10b)}
+.jmw-dot.done{background:var(--dsw-alias-state-success-primary,#2ea043)}
+.jmw-key{flex:none;font-family:var(--dsw-font-mono,ui-monospace,SFMono-Regular,Menlo,Consolas,"Cascadia Mono",monospace);font-size:12px;
+  color:var(--dsw-alias-link,#4d6bfe)}
+.jmw-sum{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.jmw-row.done .jmw-sum{color:var(--dsw-alias-label-tertiary,#8a8f99)}
+.jmw-rowmeta{flex:none;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dsw-alias-label-tertiary,#8a8f99)}
+.jmw-badge{padding:1px 7px;border-radius:6px;white-space:nowrap;background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06));
+  color:var(--dsw-alias-label-secondary,#5c6270)}
+.jmw-badge.pri{color:var(--dsw-alias-state-warn-primary,#b7791f)}
+.jmw-badge.pri.highest{color:var(--dsw-alias-state-error-primary,#d64545)}
+.jmw-badge.overdue{color:var(--dsw-alias-state-error-primary,#d64545);background:transparent}
+.jmw-badge.quiet{background:transparent}
+.jmw-badge.act{display:inline-flex;align-items:center;gap:4px;font:inherit;font-size:11px;border:1px solid transparent;cursor:pointer}
+.jmw-badge.act:hover{color:var(--dsw-alias-label-primary,#1b1d22);border-color:var(--dsw-alias-border-l3,rgba(0,0,0,.12))}
+.jmw-badge.act.on{color:var(--dsw-alias-brand-primary,#4d6bfe);border-color:var(--dsw-alias-brand-primary,rgba(77,107,254,.5));
+  background:var(--dsw-alias-state-info-bg,rgba(77,107,254,.08))}
+.jmw-caret{font-size:9px;line-height:1;opacity:.7}
+.jmw-menu{flex-basis:100%;margin:2px 0 6px;padding:8px 10px;border-radius:var(--dsw-radius-sm,8px);
+  background:var(--dsw-alias-bg-layer-2,#fff);border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.1));
+  box-shadow:0 6px 18px rgba(0,0,0,.12)}
+.jmw-menu-head{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:11px;
+  color:var(--dsw-alias-label-tertiary,#8a8f99)}
+.jmw-menu-head .jmw-linkbtn{margin-left:auto}
+.jmw-menu-chips{display:flex;flex-wrap:wrap;gap:6px}
+.jmw-menu-note{font-size:11px;color:var(--dsw-alias-label-tertiary,#8a8f99)}
+.jmw-menu-note.err{color:var(--dsw-alias-state-error-primary,#d64545)}
+.jmw-cred-lang{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.jmw-cred-langlabel{flex:0 0 auto;font-size:12px;color:var(--dsw-alias-label-secondary,#5b6068)}
+.jmw-cred-langchips{display:flex;gap:6px;flex-wrap:wrap}
+.jmw-chip.pick{padding:3px 9px;font:inherit;font-size:11px;background:transparent;border:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.12));
+  border-radius:999px;cursor:pointer}
+.jmw-chip.pick:hover:not(:disabled){color:var(--dsw-alias-label-primary,#1b1d22);
+  border-color:var(--dsw-alias-brand-primary,rgba(77,107,254,.6));background:var(--dsw-alias-state-info-bg,rgba(77,107,254,.08))}
+.jmw-chip.pick:disabled{opacity:.55;cursor:default}
+.jmw-chip.pick.cur{color:var(--dsw-alias-state-success-primary,#1f8f4e);border-color:currentColor;opacity:1}
+.jmw-chip.pick.done:not(.cur){color:var(--dsw-alias-label-tertiary,#8a8f99)}
+.jmw-flash{margin:0 18px 10px;padding:8px 12px;font-size:12px;border-radius:var(--dsw-radius-sm,8px);
+  color:var(--dsw-alias-state-success-primary,#1f8f4e);
+  background:color-mix(in srgb,var(--dsw-alias-state-success-primary,#1f8f4e) 10%,transparent);
+  border:1px solid color-mix(in srgb,var(--dsw-alias-state-success-primary,#1f8f4e) 30%,transparent)}
+.jmw-state{padding:34px 18px;text-align:center;color:var(--dsw-alias-label-tertiary,#8a8f99);font-size:12px}
+.jmw-state.err{color:var(--dsw-alias-label-primary,#1b1d22)}
+.jmw-state .msg{margin-bottom:12px;white-space:pre-wrap;word-break:break-word}
+.jmw-btn{padding:5px 14px;font:inherit;font-size:12px;color:var(--dsw-alias-label-primary,#1b1d22);cursor:pointer;
+  background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06));border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.1));
+  border-radius:var(--dsw-radius-sm,8px)}
+.jmw-btn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.1))}
+.jmw-skel{height:13px;margin:12px 40px;border-radius:7px;
+  background:linear-gradient(90deg,transparent,var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.08)),transparent);
+  background-size:220px 100%;animation:jmw-pulse 1.1s ease-in-out infinite}
+@keyframes jmw-pulse{0%{background-position:-220px 0}100%{background-position:calc(100% + 220px) 0}}
+.jmw-spin{flex:none;width:13px;height:13px;border-radius:50%;border:2px solid var(--dsw-alias-border-l3,rgba(0,0,0,.12));
+  border-top-color:var(--dsw-alias-brand-primary,#4d6bfe);animation:jmw-rotate .7s linear infinite}
+@keyframes jmw-rotate{to{transform:rotate(360deg)}}
+.jmw-foot{display:flex;gap:12px;flex-wrap:wrap;padding:9px 18px;font-size:11px;
+  color:var(--dsw-alias-label-tertiary,#8a8f99);border-top:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.04))}
+.jmw-foot .warn{color:var(--dsw-alias-state-warn-primary,#b7791f)}
+.jmw-more{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:2px 18px 8px}
+.jmw-morehint{font-size:11px;color:var(--dsw-alias-label-tertiary,#8a8f99)}
+.jmw-watch{display:flex;align-items:center;gap:12px;margin:0 18px 10px;padding:9px 12px;font-size:12px;
+  color:var(--dsw-alias-label-primary,#1b1d22);border-radius:var(--dsw-radius-sm,8px);
+  background:var(--dsw-alias-state-info-bg,rgba(77,107,254,.08));
+  border:1px solid var(--dsw-alias-state-info-primary,rgba(77,107,254,.28))}
+.jmw-watch-text{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.jmw-watch-text span{font-size:11px;color:var(--dsw-alias-label-secondary,#5c6270);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.jmw-entry-badge{flex:none;min-width:18px;height:18px;padding:0 5px;font-size:11px;line-height:18px;text-align:center;
+  border-radius:9px;color:#fff;background:var(--dsw-alias-state-error-primary,#d64545)}
+.jmw-entry{display:flex;align-items:center;gap:8px;width:100%;padding:7px 10px;font:inherit;font-size:13px;
+  color:var(--dsw-alias-label-secondary,#5c6270);background:transparent;border:0;border-radius:var(--dsw-radius-sm,8px);
+  cursor:pointer;text-align:left}
+.jmw-entry:hover{color:var(--dsw-alias-label-primary,#1b1d22);background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06))}
+.jmw-entry.narrow{width:auto;justify-content:center;padding:7px}
+.jmw-entry svg{flex:none}
+.jmw-entry-label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.jmw-cred{display:flex;flex-direction:column;gap:8px;padding:14px 2px 4px;font-size:13px;
+  color:var(--dsw-alias-label-primary,#1b1d22)}
+.jmw-cred-title{margin:0;font-size:13px;font-weight:600}
+/* 配置项按功能分组：每组一个标题 + 一段内容（标题清晰、内容留白一致） */
+.jmw-cred-group{display:flex;flex-direction:column;gap:8px;padding:11px 13px;border-radius:var(--dsw-radius-md,12px);
+  background:var(--dsw-alias-bg-layer-1,rgba(38,49,72,.03));border:1px solid var(--dsw-alias-border-l1,rgba(38,49,72,.08))}
+.jmw-cred-grouptitle{margin:0;font-size:12px;font-weight:600;letter-spacing:.2px;color:var(--dsw-alias-label-primary,#1b1d22)}
+.jmw-cred-groupbody{display:flex;flex-direction:column;gap:8px}
+.jmw-cred-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.jmw-cred-label{font-size:12px;color:var(--dsw-alias-label-secondary,#5c6270);flex:none}
+.jmw-cred-pair{display:flex;gap:10px;align-items:baseline;font-size:12px;line-height:1.6}
+.jmw-cred-pair .jmw-cred-label{min-width:88px}
+.jmw-cred-value{color:var(--dsw-alias-label-primary,#1b1d22);word-break:break-all}
+.jmw-cred-path{font-family:var(--dsw-font-mono,ui-monospace,SFMono-Regular,Menlo,Consolas,"Cascadia Mono",monospace);
+  font-size:11.5px;line-height:1.6;color:var(--dsw-alias-label-secondary,#5b6070);word-break:break-all;
+  background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06));border-radius:6px;padding:3px 7px;flex:1 1 auto}
+.jmw-cred-masked{font-family:var(--dsw-font-mono,ui-monospace,SFMono-Regular,Menlo,Consolas,"Cascadia Mono",monospace);font-size:12px;
+  padding:3px 8px;border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-bg-layer-2,rgba(38,49,72,.06));
+  border:1px solid var(--dsw-alias-border-l1,rgba(38,49,72,.12));letter-spacing:.4px}
+.jmw-cred-none{font-size:12px;color:var(--dsw-alias-state-warn-primary,#d9a10b)}
+.jmw-cred-note{font-size:11.5px;line-height:1.6;color:var(--dsw-alias-label-tertiary,#8a90a0)}
+/* 小字说明：字段下面那一行浅色提示 */
+.jmw-cred-hint{margin-top:-2px;font-size:11.5px;line-height:1.6;color:var(--dsw-alias-label-tertiary,#8a90a0)}
+.jmw-cred-hint.warn{color:var(--dsw-alias-state-warn-primary,#d9a10b)}
+.jmw-cred-form{display:flex;flex-direction:column;gap:6px}
+.jmw-cred-input,.jmw-cred-email{width:100%;max-width:420px;min-height:32px;padding:6px 10px;font:inherit;font-size:12.5px;
+  color:var(--dsw-alias-label-primary,#1b1d22);background:var(--dsw-alias-bg-layer-2,#fff);
+  border:1px solid var(--dsw-alias-border-l2,rgba(38,49,72,.18));border-radius:var(--dsw-radius-sm,8px)}
+.jmw-cred-input:focus,.jmw-cred-email:focus{outline:none;border-color:var(--dsw-alias-brand-primary,#4d6bfe);
+  box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-brand-primary,#4d6bfe) 22%,transparent)}
+.jmw-cred-num{width:96px;max-width:96px;text-align:right}
+.jmw-cred-unit{font-size:12px;color:var(--dsw-alias-label-secondary,#5c6270)}
+.jmw-cred-switch{display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;
+  color:var(--dsw-alias-label-primary,#1b1d22)}
+.jmw-cred-switch input{width:14px;height:14px;flex:none;accent-color:var(--dsw-alias-brand-primary,#4d6bfe)}
+.jmw-cred-switchlabel{line-height:1.5}
+.jmw-cred-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:2px}
+/* 按钮：颜色用内联 style 兜底（宿主样式表可能后加载把背景刷成白色），这里只负责尺寸与手感 */
+.jmw-cred-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:30px;
+  padding:6px 14px;font:inherit;font-size:12.5px;font-weight:500;line-height:1;cursor:pointer;
+  appearance:none;border-radius:var(--dsw-radius-sm,8px);
+  color:var(--dsw-alias-label-primary,#1b1d22);background:var(--dsw-alias-bg-layer-2,#fff);
+  border:1px solid var(--dsw-alias-border-l3,rgba(38,49,72,.18))}
+.jmw-cred-btn:hover:not(:disabled){filter:brightness(.97)}
+.jmw-cred-btn:active:not(:disabled){filter:brightness(.92)}
+.jmw-cred-btn:disabled{opacity:.5;cursor:default}
+.jmw-cred-btn.primary{color:#fff;background:var(--dsw-alias-brand-primary,#4d6bfe);border-color:transparent}
+.jmw-cred-btn.danger{color:#fff;background:var(--dsw-alias-state-error-primary,#d64545);border-color:transparent}
+.jmw-cred-msg{font-size:12px;line-height:1.6}
+.jmw-cred-msg.ok{color:var(--dsw-alias-state-success-primary,#2f9e44)}
+.jmw-cred-msg.err{color:var(--dsw-alias-state-error-primary,#d64545)}
+.jmw-cred-link{font-size:12px;color:var(--dsw-alias-link,#4d6bfe)}
+/* 项目切换：可横向滚动的 tab 条 + 左右滚动按钮 */
+.jmw-projects{display:flex;align-items:center;gap:6px;padding:0 18px 4px}
+.jmw-scrollbtn{flex:none;width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;
+  padding:0;font:inherit;font-size:15px;line-height:1;cursor:pointer;border-radius:var(--dsw-radius-sm,8px);
+  color:var(--dsw-alias-label-secondary,#5c6270);background:transparent;
+  border:1px solid var(--dsw-alias-border-l1,rgba(38,49,72,.1))}
+.jmw-scrollbtn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06))}
+.jmw-projectstrip{flex:1;min-width:0;display:flex;align-items:center;gap:6px;overflow-x:auto;padding:2px 0;
+  scroll-behavior:smooth;scrollbar-width:thin}
+.jmw-projectstrip::-webkit-scrollbar{height:5px}
+.jmw-projectstrip::-webkit-scrollbar-thumb{background:var(--dsw-alias-scrollbar-bg-l2,rgba(0,0,0,.18));border-radius:3px}
+.jmw-pill{flex:none;display:inline-flex;align-items:center;gap:6px;padding:3px 9px;font:inherit;font-size:11.5px;
+  line-height:1.4;cursor:pointer;white-space:nowrap;border-radius:999px;color:var(--dsw-alias-label-secondary,#5c6270);
+  background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06));border:1px solid transparent}
+.jmw-pill:hover{border-color:var(--dsw-alias-border-l2,rgba(38,49,72,.18))}
+.jmw-pill.on{color:#fff;background:#4d6bfe;border-color:#4d6bfe}
+.jmw-cred-summary{font-size:12px;color:var(--dsw-alias-label-tertiary,#8a90a0)}
+.jmw-cred-summary.err{color:#d64545}
+/* 主面板标题右侧的「配置」按钮（幽灵按钮） */
+.jmw-btn.ghost{background:transparent;color:var(--dsw-alias-label-secondary,#5c6270)}
+.jmw-btn.ghost:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06))}
+.jmw-btn.ghost.on{color:#4d6bfe;background:color-mix(in srgb,#4d6bfe 12%,transparent)}
+/* 令牌 / 配置 弹窗：宿主不给背板，整层由插件自己画（遮罩 + 居中卡片） */
+.jmw-credmask{position:fixed;inset:0;z-index:1200;display:flex;align-items:center;justify-content:center;padding:24px;
+  background:var(--dsw-alias-bg-mask-1,rgba(0,0,0,.24));backdrop-filter:blur(2px)}
+.jmw-credmodal{display:flex;flex-direction:column;gap:2px;width:min(620px,100%);max-height:min(80vh,660px);overflow:auto;
+  padding:16px 18px 18px;border-radius:var(--dsw-radius-lg,16px);background:var(--dsw-alias-bg-layer-2,#fff);
+  border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.1));box-shadow:var(--dsw-elevation-prominent,0 18px 48px rgba(0,0,0,.24));
+  font-family:var(--dsw-font-family,system-ui,-apple-system,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif);font-size:13px;line-height:1.5;
+  color:var(--dsw-alias-label-primary,#1b1d22)}
+.jmw-credmodal-head{display:flex;align-items:center;gap:10px;padding-bottom:10px;
+  border-bottom:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.06))}
+.jmw-credmodal-title{flex:1;font-size:13.5px;font-weight:600}
+.jmw-credmodal .jmw-cred{padding:12px 0 0}
+`;
+
+    function injectStyle() {
+      if (typeof document === 'undefined') return () => {};
+      if (document.querySelector(`style[data-plugin-css="${CSS_ID}"]`)) return () => {};
+      const tag = document.createElement('style');
+      tag.dataset.plugin = PLUGIN_ID;
+      tag.dataset.pluginCss = CSS_ID;
+      tag.textContent = CSS;
+      document.head.appendChild(tag);
+      return () => tag.remove();
+    }
+
+    /* -------------------------------------------------------------- 图标 */
+
+    function JiraGlyph(props) {
+      return h('svg', {
+        viewBox: '0 0 36 36', width: props?.size ?? 28, height: props?.size ?? 28,
+        className: props?.className, 'aria-hidden': true, focusable: false,
+      }, [
+        h('circle', { key: 'a', cx: 10, cy: 11, r: 2.6, fill: '#4D6BFE' }),
+        h('path', { key: 'b', d: 'M16 11h13', stroke: '#93A5FF', strokeWidth: 2.8, strokeLinecap: 'round', fill: 'none' }),
+        h('circle', { key: 'c', cx: 10, cy: 18, r: 2.1, stroke: '#93A5FF', strokeWidth: 1.8, fill: 'none' }),
+        h('path', { key: 'd', d: 'M16 18h10', stroke: '#93A5FF', strokeWidth: 2.4, strokeLinecap: 'round', fill: 'none' }),
+        h('circle', { key: 'e', cx: 10, cy: 25, r: 2.6, fill: '#4D6BFE' }),
+        h('path', { key: 'f', d: 'M16 25h7', stroke: '#93A5FF', strokeWidth: 2.8, strokeLinecap: 'round', fill: 'none' }),
+      ]);
+    }
+
+    function Chevron(props) {
+      return h('svg', {
+        viewBox: '0 0 16 16', width: 14, height: 14, className: `jmw-chev${props?.open ? ' open' : ''}`,
+        'aria-hidden': true, focusable: false,
+      }, h('path', {
+        d: 'M6 3.5 10.5 8 6 12.5', fill: 'none', stroke: 'currentColor', strokeWidth: 1.6,
+        strokeLinecap: 'round', strokeLinejoin: 'round',
+      }));
+    }
+
+    function RefreshGlyph() {
+      return h('svg', { viewBox: '0 0 16 16', width: 15, height: 15, 'aria-hidden': true, focusable: false },
+        h('path', {
+          d: 'M13 8a5 5 0 1 1-1.6-3.7M13 2.5V5.5H10', fill: 'none', stroke: 'currentColor', strokeWidth: 1.4,
+          strokeLinecap: 'round', strokeLinejoin: 'round',
+        }));
+    }
+
+    function CloseGlyph() {
+      return h('svg', { viewBox: '0 0 16 16', width: 15, height: 15, 'aria-hidden': true, focusable: false },
+        h('path', {
+          d: 'M4 4l8 8M12 4l-8 8', fill: 'none', stroke: 'currentColor', strokeWidth: 1.4, strokeLinecap: 'round',
+        }));
+    }
+
+    /* ------------------------------------------------------------ 组件 */
+
+    function Entry(props) {
+      const state = useSnapshot();
+      const narrow = props?.wide === false;
+      const unread = state.watch?.counts?.total ?? 0;
+      return h('button', {
+        type: 'button',
+        className: `jmw-entry${narrow ? ' narrow' : ''}`,
+        title: unread > 0 ? `${t('title')} · ${t('watchUnread', { count: unread })}` : t('title'),
+        'aria-label': t('title'),
+        onClick() {
+          const open = !snapshot.open;
+          patch({ open, credOpen: false, menuKey: '', filterOpen: false });
+          // 打开时若还没有数据、或上次是错误（例如当时没有会话），就顺手重试一次。
+          if (open && (snapshot.error || !snapshot.data) && !snapshot.loading) load(snapshot.scope);
+        },
+      }, [
+        h(JiraGlyph, { key: 'glyph', size: 18 }),
+        narrow ? null : h('span', { key: 'label', className: 'jmw-entry-label' }, t('title')),
+        unread > 0 ? h('span', { key: 'badge', className: 'jmw-entry-badge' }, unread > 99 ? '99+' : String(unread)) : null,
+      ]);
+    }
+
+    function watchStatus(state) {
+      const info = state.watch;
+      if (!info) return null;
+      if (info.supported === false) {
+        return h('span', { key: 'watch', className: 'warn' }, t('watchUnsupported', { reason: info.reason || '—' }));
+      }
+      if (info.error) return h('span', { key: 'watch', className: 'warn' }, t('watchError', { message: info.error }));
+      if (info.enabled === false) return h('span', { key: 'watch' }, t('watchOff'));
+      const checked = info.checkedAt ? `　${t('watchChecked', { time: formatTime(info.checkedAt) })}` : '';
+      return h('span', { key: 'watch' }, `${t('watch')}${checked}`);
+    }
+
+    function groupSummary(group) {
+      const open = (group.counts?.new ?? 0) + (group.counts?.indeterminate ?? 0);
+      const total = group.counts?.total ?? group.items.length;
+      if (open === 0) return t('allDone', { total });
+      return t('openOfTotal', { open, total });
+    }
+
+    function groupMetaLine(group) {
+      const parts = [];
+      if (group.start || group.end) {
+        parts.push(h('span', { key: 'range' }, t('range', { start: group.start || '—', end: group.end || '—' })));
+      }
+      return parts.length === 0 ? null : h('div', { key: 'meta', className: 'jmw-meta-line' }, parts);
+    }
+
+    /** 点状态徽标后展开的流转选择条：Jira 只认这些流转，所以直接把 Host 返回的列出来。 */
+    function renderStatusMenu(item) {
+      const info = snapshot.statuses[item.key] ?? {};
+      const chips = [];
+      if (info.loading) chips.push(h('span', { key: 'loading', className: 'jmw-menu-note' }, t('statusLoading')));
+      if (info.error) chips.push(h('span', { key: 'error', className: 'jmw-menu-note err' }, info.error));
+      for (const row of info.list ?? []) {
+        const current = row.to === info.current;
+        chips.push(h('button', {
+          key: row.id,
+          type: 'button',
+          className: `jmw-chip pick${current ? ' cur' : ''}${row.category === 'done' ? ' done' : ''}`,
+          disabled: current || snapshot.busyKey === item.key,
+          title: row.name === row.to ? row.to : `${row.name} → ${row.to}`,
+          onClick: (event) => {
+            event?.preventDefault?.();
+            event?.stopPropagation?.();
+            applyStatus(item.key, row);
+          },
+        }, `${row.to}${current ? ' ✓' : ''}`));
+      }
+      return h('div', { key: 'menu', className: 'jmw-menu' }, [
+        h('div', { key: 'head', className: 'jmw-menu-head' }, [
+          h('span', { key: 'title' }, t('pickStatus')),
+          snapshot.busyKey === item.key ? h('span', { key: 'spin', className: 'jmw-spin', 'aria-hidden': true }) : null,
+          h('button', {
+            key: 'cancel',
+            type: 'button',
+            className: 'jmw-linkbtn',
+            onClick: (event) => {
+              event?.preventDefault?.();
+              patch({ menuKey: '' });
+            },
+          }, t('statusCancel')),
+        ]),
+        h('div', { key: 'chips', className: 'jmw-menu-chips' }, chips.length ? chips : [h('span', { key: 'empty', className: 'jmw-menu-note' }, t('empty'))]),
+      ]);
+    }
+
+    /**
+     * tab 行右侧的「筛选」菜单：单选一个工作流状态（默认「全部状态」）。
+     * 结构 / CSS 与点状态徽标展开的流转下拉（renderStatusMenu）保持一致：同一个 .jmw-menu + chips。
+     * 选项来自 host 载荷的 statusOptions（模块级缓存见过到的状态 + 这次 items 里的状态，已去重、稳定排序）。
+     */
+    function renderFilterMenu() {
+      const current = typeof snapshot.status === 'string' ? snapshot.status : '';
+      const options = Array.isArray(snapshot.data?.statusOptions) ? snapshot.data.statusOptions : [];
+      const chips = [
+        h('button', {
+          key: '__all__',
+          type: 'button',
+          className: `jmw-chip pick${current === '' ? ' cur' : ''}`,
+          disabled: current === '',
+          title: t('filterAll'),
+          onClick: (event) => {
+            event?.preventDefault?.();
+            selectStatusFilter('');
+          },
+        }, `${t('filterAll')}${current === '' ? ' ✓' : ''}`),
+        ...options.map((row) => {
+          const name = String(row?.name ?? '');
+          if (!name) return null;
+          const on = name === current;
+          return h('button', {
+            key: name,
+            type: 'button',
+            className: `jmw-chip pick${on ? ' cur' : ''}${row?.category === 'done' ? ' done' : ''}`,
+            disabled: on,
+            title: name,
+            onClick: (event) => {
+              event?.preventDefault?.();
+              selectStatusFilter(name);
+            },
+          }, `${name}${on ? ' ✓' : ''}`);
+        }).filter(Boolean),
+      ];
+      return h('div', { key: 'filter', className: 'jmw-menu' }, [
+        h('div', { key: 'head', className: 'jmw-menu-head' }, [
+          h('span', { key: 'title' }, t('filterTitle')),
+          h('button', {
+            key: 'cancel',
+            type: 'button',
+            className: 'jmw-linkbtn',
+            onClick: (event) => {
+              event?.preventDefault?.();
+              patch({ filterOpen: false });
+            },
+          }, t('statusCancel')),
+        ]),
+        h('div', { key: 'chips', className: 'jmw-menu-chips' }, chips.length ? chips : [h('span', { key: 'empty', className: 'jmw-menu-note' }, t('empty'))]),
+      ]);
+    }
+
+    /** 选中一个状态（'' = 全部状态）→ 关菜单 → 用新筛选重查一次；渐进式渲染进度归零。 */
+    function selectStatusFilter(name) {
+      const next = typeof name === 'string' ? name : '';
+      patch({ status: next, filterOpen: false });
+      load(snapshot.scope);
+    }
+
+    /**
+     * 优先级分级。只给 High / Highest 整行上底色，Highest 的对比度明显更强；
+     * 其它（Medium / Low）不上色，靠徽标显示名字就够了。
+     */
+    function priorityLevel(priority) {
+      const name = String(priority ?? '').trim().toLowerCase();
+      if (name === 'highest' || name === 'highest priority' || name === '最高' || name === '最高级') return 'highest';
+      if (name === 'high' || name === '高') return 'high';
+      return '';
+    }
+
+    function renderRow(item) {
+      const title = `${item.summary || t('untitled')}${item.parent ? ` · ${t('parent', { key: item.parent })}` : ''}`;
+      const open = snapshot.menuKey === item.key;
+      const level = priorityLevel(item.priority);
+      const meta = [];
+      if (item.status) {
+        // 状态徽标本身就是下拉入口（行本身是链接，所以这里 stopPropagation 防止误跳转）。
+        meta.push(h('button', {
+          key: 'status',
+          type: 'button',
+          className: `jmw-badge act${open ? ' on' : ''}`,
+          title: t('setStatus'),
+          'aria-haspopup': 'true',
+          'aria-expanded': open ? 'true' : 'false',
+          onClick: (event) => {
+            event?.preventDefault?.();
+            event?.stopPropagation?.();
+            toggleStatusMenu(item.key);
+          },
+        }, [
+          h('span', { key: 'text' }, item.status),
+          h('span', { key: 'caret', className: 'jmw-caret', 'aria-hidden': true }, '▾'),
+        ]));
+      }
+      if (level) {
+        meta.push(h('span', { key: 'pri', className: `jmw-badge pri ${level}` }, item.priority));
+      }
+      if (item.due) {
+        meta.push(h('span', {
+          key: 'due',
+          className: `jmw-badge${item.overdue ? ' overdue' : ' quiet'}`,
+        }, item.overdue ? t('overdue', { date: item.due }) : t('due', { date: item.due })));
+      } else if (item.updated) {
+        meta.push(h('span', { key: 'updated', className: 'jmw-badge quiet' }, t('updated', { date: item.updated })));
+      }
+      const classes = ['jmw-row'];
+      if (item.category === 'done') classes.push('done');
+      if (open) classes.push('open');
+      if (level) classes.push(`pri-${level}`);
+      return h('div', {
+        key: item.key,
+        className: classes.join(' '),
+      }, [
+        h('a', {
+          key: 'main',
+          className: 'jmw-main',
+          href: item.url,
+          target: '_blank',
+          rel: 'noreferrer',
+          title,
+        }, [
+          h('span', { key: 'dot', className: `jmw-dot ${item.category}` }),
+          h('span', { key: 'key', className: 'jmw-key' }, item.key),
+          h('span', { key: 'sum', className: 'jmw-sum' }, item.summary || t('untitled')),
+        ]),
+        h('span', { key: 'meta', className: 'jmw-rowmeta' }, meta),
+        open ? renderStatusMenu(item) : null,
+      ]);
+    }
+
+    function Panel() {
+      const state = useSnapshot();
+      const cardRef = React.useRef(null);
+      const credRef = React.useRef(null);
+      const stripRef = React.useRef(null);
+      // 真正的滚动容器（.jmw-body）：虚拟列表必须挂在它上面。
+      const bodyRef = React.useRef(null);
+      // 令牌用独立弹窗展示（标题右侧的「配置」按钮开关）。
+      // 这个开关放在共享 snapshot 里而不是组件 state：关面板时能一次性把所有浮层
+      // （令牌弹窗、状态下拉）都收掉，下次打开不会「任务列表 + 配置」两个一起冒出来。
+      const credOpen = state.credOpen === true;
+      const setCredOpen = (value) => patch({ credOpen: typeof value === 'function' ? value(credOpen) : value });
+      // 关面板 = 连所有浮层一起关：否则下次点开入口会「列表 + 配置」两个弹窗叠着出现。
+      const closeAll = () => patch({ open: false, credOpen: false, menuKey: '', filterOpen: false });
+
+      React.useEffect(() => {
+        if (!state.open || typeof document === 'undefined') return undefined;
+        const onKeyDown = (event) => {
+          if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing
+            || event.keyCode === 229 || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey || event.repeat) return;
+          event.preventDefault?.();
+          // Esc 的顺序：令牌弹窗 → 状态下拉 → 筛选菜单 → 面板。
+          if (credOpen) {
+            setCredOpen(false);
+            return;
+          }
+          if (snapshot.menuKey) {
+            patch({ menuKey: '' });
+            return;
+          }
+          if (snapshot.filterOpen) {
+            patch({ filterOpen: false });
+            return;
+          }
+          closeAll();
+        };
+        document.addEventListener('keydown', onKeyDown, true);
+        return () => document.removeEventListener('keydown', onKeyDown, true);
+      }, [state.open, state.credOpen, state.menuKey, state.filterOpen]);
+
+      // 下面这些纯计算放在早退之前：Panel 的 hook 调用顺序每次都要一样
+      //（虚拟列表的 useVirtualizer 与滚动重置 effect 都在这一层调用）。
+      const scope = state.scope;
+      const tabs = projectTabs(state.data);
+      // 选中的项目在新结果里没了（例如那批 issue 做完了）就自动回到「全部」。
+      const project = tabs.some((tab) => tab.key === state.project) ? state.project : 'ALL';
+      const groups = buildGroups(state.data, project);
+      // 当前实际加载到的行数（用于「已加载 N 条 / 加载更多」）。
+      const loadedCount = projectItems(state.data, project).length;
+      // 「共 N 项」= approximate-count 拿到的准确总数（不是当前页条数）；拿不到就不显示
+      // （用户 2026-11-18 的口径：宁可空着，也不给一个会变的数）。选中项目 tab 时给该项目的总数。
+      const totalValue = project === 'ALL' ? state.data?.total : state.data?.projectTotals?.[project];
+      const allCollapsed = groups.length > 0 && groups.every((group) => groupCollapsed(scope, group));
+      const statusFilter = typeof state.status === 'string' ? state.status : '';
+
+      // 虚拟列表（用户 2026-11-18：「不设上限，但要用虚拟列表保证渲染效率」）：数据一次全拿到，
+      // 把「可见行」拍平成一维 entries 交给 @tanstack/react-virtual —— 组头、每条 issue、空态都是**同一个
+      // 序列里的一个条目**，DOM 里只有视口内的那些行（+ overscan）。折叠的组只产出组头，不产出它的行。
+      const entries = [];
+      for (const group of groups) {
+        const collapsed = groupCollapsed(scope, group);
+        entries.push({ kind: 'group', key: `g:${group.key}`, group, collapsed });
+        if (collapsed) continue;
+        for (const item of group.items) entries.push({ kind: 'item', key: `i:${item.key}`, item });
+      }
+      if (entries.length === 0) entries.push({ kind: 'empty', key: 'empty' });
+
+      if (typeof useVirtualizer !== 'function' && !virtualWarned) {
+        virtualWarned = true;
+        // 基座模块表里应该有它；真没有就退回「直接渲染全部行」，只是不能崩。
+        try { console.warn('[jira-work-overview] @tanstack/react-virtual 不可用，退回直接渲染全部行'); } catch { /* ignore */ }
+      }
+      const useVirtual = typeof useVirtualizer === 'function' ? useVirtualizer : fallbackVirtualizer;
+      const rowVirtualizer = useVirtual({
+        count: entries.length,
+        getScrollElement: () => bodyRef.current,
+        estimateSize: () => ROW_ESTIMATE,
+        overscan: ROW_OVERSCAN,
+        // 行高真的会变（状态下拉展开、摘要换行）：把行元素交回去重新量。
+        measureElement: (element) => (element && typeof element.getBoundingClientRect === 'function'
+          ? element.getBoundingClientRect().height
+          : ROW_ESTIMATE),
+      });
+      const virtualRows = rowVirtualizer.getVirtualItems();
+      const virtualSize = rowVirtualizer.getTotalSize();
+
+      // 换项目 tab / 换状态筛选 / 刷新出新数据：滚动位置回到顶部（比较自然）。
+      // 折叠只是重算条目，不动滚动位置，所以不放进 deps。
+      const scrollResetKey = `${project}|${statusFilter}|${state.data?.generatedAt ?? ''}`;
+      React.useEffect(() => {
+        const element = bodyRef.current;
+        if (!element) return; // 迷你 React / 还没挂载：没有可滚动元素
+        element.scrollTop = 0;
+        rowVirtualizer.scrollToIndex?.(0);
+      }, [scrollResetKey]);
+
+      if (!state.open) return null;
+
+      // 标题下的副标题 = 筛选后的准确总数（拿不到就不显示数字）+ 当前状态筛选。
+      // zh 的 filterStatusPrefix 自带前导「· 」，总数拿不到时把开头的「· 」抹掉，不留一个怪符号。
+      const subtitle = [
+        typeof totalValue === 'number' && Number.isFinite(totalValue) ? t('scopeTotal', { count: totalValue }) : '',
+        statusFilter ? t('filterStatusPrefix', { name: statusFilter }) : '',
+      ].filter(Boolean).join(' ').replace(/^·\s*/, '');
+
+      const onKeyDown = (event) => {
+        if (event.key !== 'Tab') return;
+        const root = (credOpen ? credRef.current : null) ?? cardRef.current;
+        if (!root || typeof root.querySelectorAll !== 'function') return;
+        const nodes = [...root.querySelectorAll('button:not(:disabled), a[href], [tabindex="0"]')];
+        if (nodes.length === 0) return;
+        const first = nodes[0];
+        const last = nodes[nodes.length - 1];
+        const active = typeof document !== 'undefined' ? document.activeElement : undefined;
+        if (event.shiftKey && active === first) {
+          event.preventDefault();
+          last.focus?.();
+        } else if (!event.shiftKey && active === last) {
+          event.preventDefault();
+          first.focus?.();
+        }
+      };
+
+      const unread = state.watch?.counts?.total ?? 0;
+      const changes = Array.isArray(state.watch?.changes) ? state.watch.changes : [];
+      const banner = unread > 0
+        ? h('div', { key: 'watch', className: 'jmw-watch' }, [
+          h('div', { key: 'text', className: 'jmw-watch-text' }, [
+            h('strong', { key: 'title' }, t('watchUnread', { count: unread })),
+            ...changes.slice(0, 3).map((change, index) => h('span', { key: `c${index}` }, describeChange(change))),
+          ]),
+          h('button', {
+            key: 'ack',
+            type: 'button',
+            className: 'jmw-btn',
+            onClick: () => markWatchRead(),
+          }, t('markRead')),
+        ])
+        : null;
+
+      let body;
+      if (state.error) {
+        body = h('div', { className: 'jmw-state err' }, [
+          h('div', { key: 'msg', className: 'msg' }, state.error),
+          h('button', { key: 'retry', type: 'button', className: 'jmw-btn', onClick: () => load(snapshot.scope) }, t('retry')),
+        ]);
+      } else if (state.loading && !state.data) {
+        body = h('div', { className: 'jmw-state' }, [1, 2, 3, 4, 5].map((row) => h('div', { key: row, className: 'jmw-skel' })));
+      } else {
+        // 虚拟列表：占位容器撑到 getTotalSize()，只有 getVirtualItems() 给的窗口内的条目真的在 DOM 里，
+        // 每条用 translateY(start) 定位。data-index + ref 交给 measureElement 量真实行高（行高会变）。
+        body = h('div', {
+          key: 'vlist',
+          className: 'jmw-vlist',
+          style: { height: `${virtualSize}px` },
+        }, virtualRows.map((row) => {
+          const entry = entries[row.index];
+          if (!entry) return null;
+          return h('div', {
+            key: entry.key,
+            className: 'jmw-vrow',
+            'data-index': row.index,
+            ref: typeof rowVirtualizer.measureElement === 'function' ? rowVirtualizer.measureElement : undefined,
+            style: { transform: `translateY(${row.start}px)` },
+          }, renderEntry(entry));
+        }));
+      }
+
+      /** 一维 entries 里的一个条目 → 一个 DOM 行（组头 / 任务行 / 空态）。 */
+      function renderEntry(entry) {
+        if (entry.kind === 'group') {
+          return h('section', { className: 'jmw-group' }, [
+            h('button', {
+              key: 'head',
+              type: 'button',
+              className: 'jmw-grouphead',
+              'aria-expanded': entry.collapsed ? 'false' : 'true',
+              onClick: () => setGroupCollapsed(scope, entry.group, !entry.collapsed),
+            }, [
+              h(Chevron, { key: 'chev', open: !entry.collapsed }),
+              h('span', { key: 'name', className: 'jmw-sprint' }, entry.group.name),
+              h('span', { key: 'count', className: 'jmw-count' }, groupSummary(entry.group)),
+            ]),
+            groupMetaLine(entry.group),
+          ]);
+        }
+        if (entry.kind === 'item') return renderRow(entry.item);
+        return h('div', { className: 'jmw-state' }, state.loading ? t('loading') : t('empty'));
+      }
+
+      // 「加载更多」：只在 host 真的截断时出现（面板固定要 --limit=0，所以这只可能是撞到了
+      // host 的安全上限 5000 条 / 50 页 / 30s）。此时上限已经顶到底，抬不上去，按钮禁用。
+      const cappedCount = Number(state.data?.limit) > 0 ? Number(state.data.limit) : LIMIT_MAX;
+      const moreBlock = loadedCount > 0 && state.data?.hasMore
+        ? h('div', { key: 'more', className: 'jmw-more' }, [
+          h('button', {
+            key: 'btn',
+            type: 'button',
+            className: 'jmw-btn',
+            disabled: true,
+            title: t('loadMoreHint'),
+            onClick: () => {},
+          }, t('loadMoreCap', { cap: cappedCount })),
+          h('span', { key: 'now', className: 'jmw-morehint' }, t('loadedOf', { count: loadedCount, limit: cappedCount })),
+        ])
+        : null;
+
+      const card = h('div', {
+        className: 'jmw-card',
+        role: 'dialog',
+        'aria-modal': 'true',
+        'aria-label': t('title'),
+        ref: cardRef,
+        onKeyDown,
+      }, [
+        h('div', { key: 'head', className: 'jmw-head' }, [
+          h(JiraGlyph, { key: 'glyph', className: 'jmw-glyph', size: 28 }),
+          h('div', { key: 'text', className: 'jmw-headtext' }, [
+            h('div', { key: 'title', className: 'jmw-title' }, t('title')),
+            subtitle ? h('div', { key: 'sub', className: 'jmw-sub' }, subtitle) : null,
+          ]),
+          h('button', {
+            key: 'cred',
+            type: 'button',
+            className: `jmw-btn ghost${credOpen ? ' on' : ''}`,
+            title: t('credTitle'),
+            'aria-label': t('credTitle'),
+            'aria-expanded': credOpen ? 'true' : 'false',
+            onClick: () => setCredOpen((value) => !value),
+          }, t('credOpen')),
+          state.loading ? h('span', { key: 'spin', className: 'jmw-spin', 'aria-hidden': true }) : null,
+          h('button', {
+            key: 'refresh',
+            type: 'button',
+            className: 'jmw-iconbtn',
+            title: t('refresh'),
+            'aria-label': t('refresh'),
+            disabled: state.loading,
+            onClick: () => load(snapshot.scope),
+          }, h(RefreshGlyph)),
+          h('button', {
+            key: 'close',
+            type: 'button',
+            className: 'jmw-iconbtn',
+            title: t('close'),
+            'aria-label': t('close'),
+            onClick: () => closeAll(),
+          }, h(CloseGlyph)),
+        ]),
+        // tab 行：项目 tab（左滚 / 条 / 右滚）+ 状态筛选 + 展开全部 / 折叠全部。
+        // 范围分段控件（未完成 / 全部）与它右侧的总数已删（用户 2026-11-18）：范围固定为 all，
+        // 总数移到标题下的副标题，「展开 / 折叠全部」从原来的第二行挪到这里。
+        state.data
+          ? h('div', { key: 'projects', className: 'jmw-projects' }, [
+            tabs.length > 1
+              ? h('button', {
+                key: 'left',
+                type: 'button',
+                className: 'jmw-scrollbtn',
+                title: t('scrollLeft'),
+                'aria-label': t('scrollLeft'),
+                onClick: () => stripRef.current?.scrollBy?.({ left: -180, behavior: 'smooth' }),
+              }, '‹')
+              : null,
+            h('div', { key: 'strip', className: 'jmw-projectstrip', ref: stripRef }, tabs.map((tab) => h('button', {
+              key: tab.key,
+              type: 'button',
+              className: `jmw-pill${tab.key === project ? ' on' : ''}`,
+              'aria-pressed': tab.key === project ? 'true' : 'false',
+              // 切项目 tab：数据已经全在手里，不需要重新查询，也没有「分批画」的状态要重置；
+              // 滚动位置由 Panel 里的一个 effect 统一拉回顶部（换 tab / 换筛选都会）。
+              onClick: () => patch({ project: tab.key }),
+            }, h('span', { key: 'name', className: 'jmw-pillname' }, tab.key === 'ALL' ? t('projectAll') : tab.key)))),
+            tabs.length > 1
+              ? h('button', {
+                key: 'right',
+                type: 'button',
+                className: 'jmw-scrollbtn',
+                title: t('scrollRight'),
+                'aria-label': t('scrollRight'),
+                onClick: () => stripRef.current?.scrollBy?.({ left: 180, behavior: 'smooth' }),
+              }, '›')
+              : null,
+            // 单选状态筛选：平时显示「筛选」，选了某个状态后显示状态名（保持一致）。
+            h('button', {
+              key: 'filter',
+              type: 'button',
+              className: `jmw-filterbtn${state.filterOpen ? ' on' : ''}${statusFilter ? ' set' : ''}`,
+              title: statusFilter ? t('filterStatusPrefix', { name: statusFilter }).replace(/^·\s*/, '') : t('filterTitle'),
+              'aria-label': t('filterTitle'),
+              'aria-expanded': state.filterOpen ? 'true' : 'false',
+              onClick: () => patch({ filterOpen: !state.filterOpen, menuKey: '' }),
+            }, `${statusFilter || t('filterTitle')} ▾`),
+            groups.length > 0
+              ? h('button', {
+                key: 'all',
+                type: 'button',
+                className: 'jmw-linkbtn',
+                onClick: () => setAllCollapsed(scope, groups, !allCollapsed),
+              }, allCollapsed ? t('expandAll') : t('collapseAll'))
+              : null,
+          ])
+          : null,
+        // 筛选菜单：结构 / CSS 与状态下拉一致，渲染在 tab 行下面一行。
+        state.filterOpen ? renderFilterMenu() : null,
+        banner,
+        state.flash ? h('div', { key: 'flash', className: 'jmw-flash' }, state.flash) : null,
+        // 切范围时旧列表留在原位（原子替换，不闪空），同时压暗一档表示「这批是上一个 tab 的」。
+        // 这里就是**真正的滚动容器**：虚拟列表挂在它上面，列表、组头、空态、「加载更多」都在它里面滚。
+        h('div', {
+          key: 'body',
+          className: `jmw-body${state.loading && state.data ? ' pending' : ''}`,
+          'aria-busy': state.loading ? 'true' : 'false',
+          ref: bodyRef,
+        }, [body, moreBlock]),
+        h('div', { key: 'foot', className: 'jmw-foot' }, [
+          state.data?.generatedAt ? h('span', { key: 'time' }, t('generated', { time: formatTime(state.data.generatedAt) })) : null,
+          state.data?.credentialSource ? h('span', { key: 'cred' }, t('credentials', { source: state.data.credentialSource })) : null,
+          // 范围固定为 all（含已完成 / 已关闭），不再显示范围文案；只看当前单选的状态筛选。
+          statusFilter ? h('span', { key: 'status' }, t('filterStatusPrefix', { name: statusFilter }).replace(/^·\s*/, '')) : null,
+          // 条数口径：`limit: 0` = 不限制 —— 「已加载 N 条（全部）」；万一是正数上限就照旧写上限；
+          // 到了 5000 条安全上限还 hasMore 就明说「已达安全上限，还有更多」，不假装取完了。
+          state.data?.limit
+            ? h('span', { key: 'limit' }, t('loadedOf', { count: loadedCount, limit: state.data.limit }))
+            : state.data
+              ? h('span', { key: 'limit' }, state.data.hasMore
+                ? t('loadedCapped', { count: loadedCount, cap: LIMIT_MAX })
+                : t('loadedAll', { count: loadedCount }))
+              : null,
+          watchStatus(state),
+        ]),
+      ]);
+
+      const credModal = credOpen
+        ? h('div', {
+          key: 'credmodal',
+          className: 'jmw-credmask',
+          onClick: (event) => {
+            if (event.target === event.currentTarget) setCredOpen(false);
+          },
+        }, h('div', {
+          className: 'jmw-credmodal',
+          role: 'dialog',
+          'aria-modal': 'true',
+          'aria-label': t('credTitle'),
+          ref: credRef,
+          onKeyDown,
+        }, [
+          h('div', { key: 'head', className: 'jmw-credmodal-head' }, [
+            h('div', { key: 'title', className: 'jmw-credmodal-title' }, t('credTitle')),
+            h('button', {
+              key: 'close',
+              type: 'button',
+              className: 'jmw-iconbtn',
+              title: t('close'),
+              'aria-label': t('close'),
+              onClick: () => setCredOpen(false),
+            }, h(CloseGlyph)),
+          ]),
+          h(CredentialSettings, { key: 'body', view: 'page' }),
+        ]))
+        : null;
+
+      const mask = h('div', {
+        className: 'jmw-mask',
+        onClick: (event) => {
+          if (event.target === event.currentTarget) closeAll();
+        },
+      }, credOpen ? [card, credModal] : card);
+      if (typeof createPortal === 'function' && typeof document !== 'undefined') {
+        return createPortal(mask, document.body);
+      }
+      return h('div', { className: 'jmw-inline', style: { position: 'fixed', inset: 0, zIndex: 1000 } }, mask);
+    }
+
+    /* ------------------------------------------------- 插件配置页：Jira 令牌 */
+
+    /*
+     * 插件列表里「Jira work overview」这一行的配置页（slots: plugins.row.config）。
+     * 换令牌这件事不走 Host 设置文档，而是走 Host 自己开的一条精确 Fetch 路由：
+     * 值只写进 DSH 凭据库的同一个键（默认 JIRA_API_TOKEN），读取时已经打码，界面拿不到完整令牌。
+     */
+    // ---- 配置页的小零件（标题 + 内容 两段式，按功能分组） ----
+    // 跟随主题的颜色一律写死成「深底 + 白字」或「主题底色 + 主题字色」：
+    // 不能用 --dsw-alias-brand-primary 当按钮底色 —— 浅色主题下它接近黑、深色主题下接近白，
+    // 配白色文字就会出现「白底白字」（用户实际遇到过两次）。
+    const BTN_PRIMARY = {
+      background: '#4d6bfe',
+      color: '#ffffff',
+      borderColor: '#4d6bfe',
+    };
+    const BTN_DANGER = {
+      background: '#d64545',
+      color: '#ffffff',
+      borderColor: '#d64545',
+    };
+    const BTN_PLAIN = {
+      background: 'var(--dsw-alias-interactive-bg-hover-solid,rgba(38,49,72,.08))',
+      color: 'var(--dsw-alias-label-primary,#1b1d22)',
+      borderColor: 'var(--dsw-alias-border-l3,rgba(38,49,72,.18))',
+    };
+
+    function credGroup(key, title, children) {
+      return h('section', { key, className: 'jmw-cred-group' }, [
+        h('h5', { key: 'title', className: 'jmw-cred-grouptitle' }, title),
+        h('div', { key: 'body', className: 'jmw-cred-groupbody' }, children.filter(Boolean)),
+      ]);
+    }
+
+    function credPair(key, label, value) {
+      const shown = value === undefined || value === null || value === '' ? '—' : String(value);
+      return h('div', { key, className: 'jmw-cred-pair' }, [
+        h('span', { key: 'k', className: 'jmw-cred-label' }, label),
+        h('span', { key: 'v', className: 'jmw-cred-value' }, shown),
+      ]);
+    }
+
+    function credSwitch(key, label, checked, onChange, disabled) {
+      return h('label', { key, className: 'jmw-cred-switch' }, [
+        h('input', {
+          key: 'i',
+          type: 'checkbox',
+          checked: checked === true,
+          disabled: disabled === true,
+          onChange: (event) => onChange(event?.target?.checked === true),
+        }),
+        h('span', { key: 't', className: 'jmw-cred-switchlabel' }, label),
+      ]);
+    }
+
+    function CredentialSettings(props) {
+      const view = props?.view === 'summary' ? 'summary' : 'page';
+      const [state, setState] = React.useState({
+        loading: true,
+        status: null,
+        watch: null,
+        writable: true,
+        // 表单里的三个可改字段：间隔用「秒」展示，保存时换回毫秒。
+        form: { watchEnabled: true, watchIntervalMs: 60000, notify: true, maxResults: LIMIT_DEFAULT },
+        input: '',
+        // 账号邮箱是可改字段，和令牌一起保存（Basic 认证 = 邮箱 + 令牌）。
+        email: '',
+        emailTouched: false,
+        busy: '',
+        message: '',
+        error: '',
+        watchMessage: '',
+        watchError: '',
+        watchBusy: false,
+        // 配置文件（当前 profile 的 cordis.patch.yml）：路径信息、打开动作与提示。
+        patch: null,
+        openBusy: '',
+        // 「用指定应用打开」输入框的内容（应用名或完整路径）。
+        customApp: '',
+        patchMessage: '',
+        patchError: '',
+        copied: false,
+        confirming: false,
+      });
+      let watchDebounce = null;
+      let watchFlashTimer = null;
+      let patchFlashTimer = null;
+
+      function readWatch(payload, previous) {
+        const watch = payload?.watch ?? previous?.watch ?? null;
+        const fallback = previous?.form ?? { watchEnabled: true, watchIntervalMs: 60000, notify: true, maxResults: LIMIT_DEFAULT, language: 'auto' };
+        const next = watch
+          ? {
+            watchEnabled: watch.watchEnabled !== false,
+            watchIntervalMs: Number(watch.watchIntervalMs) || fallback.watchIntervalMs,
+            notify: watch.notify !== false,
+            // 0 是合法值（= 不限制）：不能用 `Number(x) || 默认` 那种写法，会把 0 吞成默认。
+            maxResults: Number.isFinite(Number(watch.maxResults)) ? normalizeLimit(watch.maxResults, fallback.maxResults) : fallback.maxResults,
+            language: ['auto', 'zh', 'en'].includes(watch.language) ? watch.language : (fallback.language ?? 'auto'),
+          }
+          : { ...fallback };
+        return {
+          watch,
+          writable: payload?.writable ?? previous?.writable ?? true,
+          form: next,
+          patch: payload?.patch ?? previous?.patch ?? null,
+        };
+      }
+
+      async function refresh() {
+        try {
+          const response = await watchFetch(CREDENTIAL_PATH, { method: 'GET', headers: { accept: 'application/json' } });
+          const payload = await response.json().catch(() => null);
+          if (payload?.ok !== true) throw new Error(payload?.error || `HTTP ${response.status}`);
+          setState((prev) => ({
+            ...prev,
+            loading: false,
+            status: payload,
+            // 用户正在输入时不要用服务器值覆盖他手里的内容。
+            email: prev.emailTouched ? prev.email : String(payload.email ?? ''),
+            error: '',
+          }));
+        } catch (error) {
+          setState((prev) => ({ ...prev, loading: false, error: t('credLoadFailed', { message: String(error?.message ?? error) }) }));
+        }
+        try {
+          const response = await watchFetch(SETTINGS_PATH, { method: 'GET', headers: { accept: 'application/json' } });
+          const payload = await response.json().catch(() => null);
+          if (payload?.ok !== true) throw new Error(payload?.error || `HTTP ${response.status}`);
+          setState((prev) => ({ ...prev, ...readWatch(payload, prev), watchError: '' }));
+        } catch (error) {
+          setState((prev) => ({ ...prev, watchError: t('watchLoadFailed', { message: String(error?.message ?? error) }) }));
+        }
+      }
+
+      React.useEffect(() => {
+        void refresh();
+      }, []);
+
+      async function save() {
+        // 令牌与邮箱是一对：有令牌就用新令牌，没令牌时用当前生效的那把（只改邮箱的场景）。
+        const token = state.input.trim();
+        const email = state.email.trim();
+        if (!token && !emailChanged()) return;
+        setState((prev) => ({ ...prev, busy: 'save', message: '', error: '' }));
+        try {
+          const response = await watchFetch(CREDENTIAL_PATH, {
+            method: 'POST',
+            headers: { accept: 'application/json', 'content-type': 'application/json' },
+            body: JSON.stringify({ token, email }),
+          });
+          const payload = await response.json().catch(() => null);
+          if (payload?.ok !== true) throw new Error(payload?.error || `HTTP ${response.status}`);
+          const offline = payload.verification && payload.verification.ok === false;
+          const account = payload.verification?.account ? `　${t('credSavedAs', { account: payload.verification.account })}` : '';
+          const emailNote = payload.emailSaved ? `　${t('credSavedEmail', { email: payload.email ?? email })}` : '';
+          setState((prev) => ({
+            ...prev,
+            busy: '',
+            input: '',
+            email: String(payload.email ?? prev.email),
+            emailTouched: false,
+            status: payload,
+            error: '',
+            // 账号只跟着这次保存的消息显示；不要把验证结果留在 state 里，否则下一条消息也会挂上它。
+            message: (offline
+              ? t('credSavedOffline', { key: payload.credentialKey, message: payload.verification.message ?? '' })
+              : t('credSaved', { key: payload.credentialKey })) + emailNote + account,
+          }));
+        } catch (error) {
+          setState((prev) => ({ ...prev, busy: '', error: t('credSaveFailed', { message: String(error?.message ?? error) }) }));
+        }
+      }
+
+      // 邮箱是否真的变了（和服务端原文比），决定「只改邮箱」时按钮是否可用。
+      function emailChanged() {
+        const current = String(state.status?.email ?? '').trim();
+        return state.email.trim() !== current;
+      }
+
+      // 监视设置「改了就生效」：开关一拨、间隔一改就写进当前 profile 的 Cordis patch，
+      // 不需要「保存」按钮（只有令牌那种敏感值才需要显式确认后再落库）。
+      async function pushWatch(patch) {
+        const next = { ...state.form, ...patch };
+        const seconds = Math.max(15, Math.round((Number(next.watchIntervalMs) || 60000) / 1000));
+        const results = normalizeLimit(next.maxResults, LIMIT_DEFAULT);
+        const payloadBody = {
+          watchEnabled: next.watchEnabled === true,
+          watchIntervalMs: seconds * 1000,
+          notify: next.notify === true,
+          maxResults: results,
+          language: ['zh', 'en'].includes(next.language) ? next.language : 'auto',
+        };
+        clearTimeout(watchFlashTimer);
+        setState((prev) => ({ ...prev, form: { ...prev.form, ...patch }, watchBusy: true, watchMessage: '', watchError: '' }));
+        try {
+          const response = await watchFetch(SETTINGS_PATH, {
+            method: 'POST',
+            headers: { accept: 'application/json', 'content-type': 'application/json' },
+            body: JSON.stringify(payloadBody),
+          });
+          const payload = await response.json().catch(() => null);
+          if (payload?.ok !== true) throw new Error(payload?.error || `HTTP ${response.status}`);
+          setState((prev) => ({
+            ...prev,
+            watchBusy: false,
+            ...readWatch(payload, prev),
+            watchError: '',
+            watchMessage: payload.persisted === true
+              ? t('watchSaved')
+              : t('watchSavedLocal', { reason: payload.reason ?? '' }),
+          }));
+          watchFlashTimer = setTimeout(() => setState((prev) => ({ ...prev, watchMessage: '' })), 2600);
+          if (typeof watchFlashTimer?.unref === 'function') watchFlashTimer.unref();
+        } catch (error) {
+          // 失败就把界面回退成服务器上的值，别让人以为已经生效了。
+          setState((prev) => ({
+            ...prev,
+            watchBusy: false,
+            ...readWatch(null, prev),
+            watchMessage: '',
+            watchError: t('credSaveFailed', { message: String(error?.message ?? error) }),
+          }));
+        }
+      }
+
+      // 「打开 cordis.patch.yml」：全部交给 host 去执行（它才有系统级能力）。
+      // default = 系统默认程序；choose = 系统「打开方式」选择器（macOS / Windows）；
+      // reveal = 在文件管理器里定位到该文件；app = 用探测到的某个编辑器；
+      // custom = 用用户手填的应用名 / 完整路径。app 会把应用作为第二个参数带上。
+      async function openPatch(mode, app) {
+        const target = state.patch?.patchPath;
+        if (!target) return;
+        const body = typeof app === 'string' && app ? { open: mode, app } : { open: mode };
+        setState((prev) => ({ ...prev, openBusy: mode, patchMessage: '', patchError: '' }));
+        try {
+          const response = await watchFetch(SETTINGS_PATH, {
+            method: 'POST',
+            headers: { accept: 'application/json', 'content-type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          const payload = await response.json().catch(() => null);
+          if (payload?.ok !== true) throw new Error(payload?.error || `HTTP ${response.status}`);
+          const name = String(payload?.app ?? app ?? '');
+          // app 模式回的是编辑器 id，提示里说给人看的 label（例如 vscode → VS Code）。
+          const shown = mode === 'app'
+            ? ((state.patch?.editors ?? []).find((row) => row?.id === name)?.label ?? name)
+            : name;
+          setState((prev) => ({
+            ...prev,
+            openBusy: '',
+            // app / custom 用「已交给 {app} 打开」，其余沿用原来的三种文案。
+            patchMessage: mode === 'reveal'
+              ? t('patchRevealed')
+              : (mode === 'choose'
+                ? t('patchChooseSent')
+                : (name && (mode === 'app' || mode === 'custom') ? t('patchOpenedApp', { app: shown }) : t('patchOpened'))),
+            // app 成功后本地就把「上次用过」标到刚点的那个按钮上（等下一次 GET 会自然同步）。
+            patch: mode === 'app' && prev.patch ? { ...prev.patch, preferredEditor: app } : prev.patch,
+            // custom 成功后清空输入框，方便直接换下一个应用。
+            customApp: mode === 'custom' ? '' : prev.customApp,
+          }));
+          clearTimeout(patchFlashTimer);
+          patchFlashTimer = setTimeout(() => setState((prev) => ({ ...prev, patchMessage: '' })), 2600);
+          if (typeof patchFlashTimer?.unref === 'function') patchFlashTimer.unref();
+        } catch (error) {
+          setState((prev) => ({ ...prev, openBusy: '', patchError: t('patchFailed', { message: String(error?.message ?? error) }) }));
+        }
+      }
+
+      // 路径可能又长又不方便手抄：优先用剪贴板 API，老壳里退回 execCommand。
+      async function copyPath() {
+        const text = String(state.patch?.patchPath ?? '');
+        if (!text) return;
+        let ok = false;
+        try {
+          if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(text);
+            ok = true;
+          }
+        } catch {
+          ok = false;
+        }
+        if (!ok && typeof document !== 'undefined' && typeof document.createElement === 'function') {
+          try {
+            const area = document.createElement('textarea');
+            area.value = text;
+            area.setAttribute?.('readonly', 'readonly');
+            document.body?.appendChild?.(area);
+            area.select?.();
+            ok = typeof document.execCommand === 'function' && document.execCommand('copy') === true;
+            document.body?.removeChild?.(area);
+          } catch {
+            ok = false;
+          }
+        }
+        setState((prev) => ({ ...prev, copied: ok, patchError: ok ? '' : t('patchCopyFailed') }));
+        if (ok) {
+          clearTimeout(patchFlashTimer);
+          patchFlashTimer = setTimeout(() => setState((prev) => ({ ...prev, copied: false })), 2600);
+          if (typeof patchFlashTimer?.unref === 'function') patchFlashTimer.unref();
+        }
+      }
+
+      // 间隔用 debounce：连着敲「30」不要发两次写入；失焦 / 回车立刻落盘。
+      /** 界面语言：auto = 跟随 DSH 语言设置 / 浏览器，zh 与 en 强制；改了就生效。 */
+      function chooseLanguage(value) {
+        const next = ['auto', 'zh', 'en'].includes(value) ? value : 'auto';
+        setState((prev) => ({ ...prev, form: { ...prev.form, language: next } }));
+        void pushWatch({ language: next });
+      }
+
+      function langChip(value, label) {
+        const on = (state.form.language ?? 'auto') === value;
+        return h('button', {
+          key: `lang-${value}`,
+          type: 'button',
+          className: `jmw-chip pick${on ? ' cur' : ''}`,
+          'aria-pressed': on,
+          onClick: () => chooseLanguage(value),
+        }, label);
+      }
+
+      function readResults(text, immediate) {
+        // 空串（正在清空输入框）不动当前值；**0 是合法值 = 不限制**，不能像旧版那样吞掉。
+        const raw = String(text ?? '').trim();
+        const results = raw === '' ? state.form.maxResults : normalizeLimit(raw, state.form.maxResults);
+        clearTimeout(watchDebounce);
+        setState((prev) => ({ ...prev, form: { ...prev.form, maxResults: results } }));
+        if (immediate) {
+          void pushWatch({ maxResults: results });
+          return;
+        }
+        watchDebounce = setTimeout(() => { void pushWatch({ maxResults: results }); }, 700);
+        if (typeof watchDebounce?.unref === 'function') watchDebounce.unref();
+      }
+
+      function changeInterval(text, immediate) {
+        const value = Number(text);
+        const intervalMs = Number.isFinite(value) && value > 0 ? Math.round(value * 1000) : state.form.watchIntervalMs;
+        clearTimeout(watchDebounce);
+        setState((prev) => ({ ...prev, form: { ...prev.form, watchIntervalMs: intervalMs } }));
+        if (immediate) {
+          void pushWatch({ watchIntervalMs: intervalMs });
+          return;
+        }
+        watchDebounce = setTimeout(() => { void pushWatch({ watchIntervalMs: intervalMs }); }, 700);
+        if (typeof watchDebounce?.unref === 'function') watchDebounce.unref();
+      }
+
+      async function clear() {
+        if (!state.confirming) {
+          setState((prev) => ({ ...prev, confirming: true }));
+          return;
+        }
+        setState((prev) => ({ ...prev, busy: 'clear', confirming: false, message: '', error: '' }));
+        try {
+          const response = await watchFetch(CREDENTIAL_PATH, {
+            method: 'POST',
+            headers: { accept: 'application/json', 'content-type': 'application/json' },
+            body: JSON.stringify({ clear: true }),
+          });
+          const payload = await response.json().catch(() => null);
+          if (payload?.ok !== true) throw new Error(payload?.error || `HTTP ${response.status}`);
+          setState((prev) => ({ ...prev, busy: '', status: payload, error: '', message: t('credCleared', { key: payload.credentialKey }) }));
+        } catch (error) {
+          setState((prev) => ({ ...prev, busy: '', error: t('credClearFailed', { message: String(error?.message ?? error) }) }));
+        }
+      }
+
+      const status = state.status;
+      const settings = status?.settings ?? {};
+      const patchFile = state.patch;
+      const seconds = Math.max(15, Math.round((Number(state.form.watchIntervalMs) || 60000) / 1000));
+
+      if (view === 'summary') {
+        if (state.error && !status) return h('span', { className: 'jmw-cred-summary err' }, state.error);
+        if (!status) return h('span', { className: 'jmw-cred-summary' }, t('credTitle'));
+        return h('span', { className: 'jmw-cred-summary' }, status.configured
+          ? t('credSummarySet', { masked: status.masked })
+          : t('credSummaryMissing'));
+      }
+
+      return h('section', { className: 'jmw-cred' }, [
+        credGroup('ui', t('uiTitle'), [
+          h('div', { key: 'lang', className: 'jmw-cred-lang' }, [
+            h('span', { key: 'label', className: 'jmw-cred-langlabel' }, t('uiLanguageLabel')),
+            h('div', { key: 'chips', className: 'jmw-cred-langchips' }, [
+              langChip('auto', t('uiAuto')),
+              langChip('zh', t('uiZh')),
+              langChip('en', t('uiEn')),
+            ]),
+          ]),
+          h('p', { key: 'hint', className: 'jmw-cred-hint' }, t('uiHint')),
+        ]),
+        credGroup('token', t('credGroupToken'), [
+          h('div', { key: 'current', className: 'jmw-cred-row' }, [
+            h('span', { key: 'label', className: 'jmw-cred-label' }, t('credCurrent')),
+            status?.configured
+              ? h('code', { key: 'masked', className: 'jmw-cred-masked' }, status.masked)
+              : h('span', { key: 'none', className: 'jmw-cred-none' }, t('credNotSet')),
+          ]),
+          status ? h('div', { key: 'source', className: 'jmw-cred-note' }, t('credSource', { source: status.sourceLabel })) : null,
+          status ? h('div', { key: 'key', className: 'jmw-cred-note' }, `${t('credKeyLabel')}：${t('credKeyValue', { key: status.credentialKey })}`) : null,
+          h('div', { key: 'form', className: 'jmw-cred-form' }, [
+            h('label', { key: 'emailLabel', className: 'jmw-cred-label', htmlFor: 'jmw-cred-email' }, t('credEmailLabel')),
+            h('input', {
+              key: 'email',
+              id: 'jmw-cred-email',
+              className: 'jmw-cred-email',
+              type: 'text',
+              inputMode: 'email',
+              autoComplete: 'off',
+              spellCheck: false,
+              placeholder: 'name@company.com',
+              value: state.email,
+              onInput: (event) => setState((prev) => ({ ...prev, email: event?.target?.value ?? '', emailTouched: true })),
+            }),
+            h('div', { key: 'emailHint', className: 'jmw-cred-hint' }, t('credEmailHint')),
+            h('label', { key: 'label', className: 'jmw-cred-label', htmlFor: 'jmw-cred-input' }, t('credInputLabel')),
+            h('input', {
+              key: 'input',
+              id: 'jmw-cred-input',
+              className: 'jmw-cred-input',
+              type: 'password',
+              autoComplete: 'off',
+              spellCheck: false,
+              placeholder: t('credPlaceholder'),
+              value: state.input,
+              onInput: (event) => setState((prev) => ({ ...prev, input: event?.target?.value ?? '' })),
+            }),
+            h('div', { key: 'actions', className: 'jmw-cred-actions' }, [
+              h('button', {
+                key: 'save',
+                type: 'button',
+                className: 'jmw-cred-btn primary',
+                style: BTN_PRIMARY,
+                disabled: state.busy === 'save' || state.email.trim() === ''
+                  || (state.input.trim() === '' && !emailChanged()),
+                onClick: () => { void save(); },
+              }, state.busy === 'save' ? t('credSaving') : t('credSave')),
+              h('button', {
+                key: 'clear',
+                type: 'button',
+                className: `jmw-cred-btn${state.confirming ? ' danger' : ''}`,
+                style: state.confirming ? BTN_DANGER : BTN_PLAIN,
+                disabled: state.busy === 'clear',
+                onClick: () => { void clear(); },
+              }, state.confirming ? t('credConfirmClear') : t('credClear')),
+            ]),
+          ]),
+          state.message ? h('div', { key: 'message', className: 'jmw-cred-msg ok' }, state.message) : null,
+          state.error ? h('div', { key: 'error', className: 'jmw-cred-msg err' }, state.error) : null,
+          h('div', { key: 'note', className: 'jmw-cred-note' }, t('credNote')),
+          h('a', { key: 'tokens', className: 'jmw-cred-link', href: TOKENS_URL, target: '_blank', rel: 'noreferrer' }, t('credTokensLink')),
+        ]),
+        credGroup('connection', t('credGroupConnection'), [
+          credPair('baseUrl', t('fBaseUrl'), settings.baseUrl),
+        ]),
+        credGroup('query', t('credGroupQuery'), [
+          h('div', { key: 'results', className: 'jmw-cred-row' }, [
+            h('label', { key: 'label', className: 'jmw-cred-label', htmlFor: 'jmw-results' }, t('resultsLabel')),
+            h('input', {
+              key: 'input',
+              id: 'jmw-results',
+              className: 'jmw-cred-input jmw-cred-num',
+              type: 'number',
+              // 0 = 不限制（默认）；正数 10–5000。min 必须是 0，否则浏览器原生校验会拦住「0」。
+              min: '0',
+              max: String(LIMIT_MAX),
+              step: '10',
+              value: String(state.form.maxResults ?? LIMIT_DEFAULT),
+              onInput: (event) => readResults(event?.target?.value, false),
+              onChange: (event) => readResults(event?.target?.value, true),
+              onBlur: (event) => readResults(event?.target?.value, true),
+              onKeyDown: (event) => {
+                if (event?.key === 'Enter') readResults(event?.target?.value, true);
+              },
+            }),
+            h('span', { key: 'unit', className: 'jmw-cred-unit' }, t('resultsUnit')),
+          ]),
+          h('div', { key: 'resultsHint', className: 'jmw-cred-hint' }, t('resultsHint')),
+          credPair('timeout', t('fTimeout'), settings.timeoutMs === undefined ? undefined : `${settings.timeoutMs} ms`),
+        ]),
+        credGroup('watch', t('credGroupWatch'), [
+          credSwitch('enabled', t('watchEnabledLabel'), state.form.watchEnabled, (checked) => {
+            void pushWatch({ watchEnabled: checked });
+          }, state.watchBusy === true),
+          h('div', { key: 'interval', className: 'jmw-cred-row' }, [
+            h('label', { key: 'label', className: 'jmw-cred-label', htmlFor: 'jmw-watch-interval' }, t('watchIntervalLabel')),
+            h('input', {
+              key: 'input',
+              id: 'jmw-watch-interval',
+              className: 'jmw-cred-input jmw-cred-num',
+              type: 'number',
+              min: '15',
+              step: '5',
+              value: String(seconds),
+              onInput: (event) => changeInterval(event?.target?.value, false),
+              onChange: (event) => changeInterval(event?.target?.value, true),
+              onBlur: (event) => changeInterval(event?.target?.value, true),
+              onKeyDown: (event) => {
+                if (event?.key === 'Enter') changeInterval(event?.target?.value, true);
+              },
+            }),
+            h('span', { key: 'unit', className: 'jmw-cred-unit' }, t('watchIntervalUnit')),
+          ]),
+          h('div', { key: 'intervalHint', className: 'jmw-cred-hint' }, t('watchIntervalHint')),
+          credSwitch('notify', t('notifySwitchLabel'), state.form.notify, (checked) => {
+            void pushWatch({ notify: checked });
+          }, state.watchBusy === true),
+          state.writable === false ? h('div', { key: 'writable', className: 'jmw-cred-hint warn' }, t('writableOff')) : null,
+          state.watchBusy === true ? h('div', { key: 'busy', className: 'jmw-cred-note' }, t('watchSaving')) : null,
+          state.watchMessage ? h('div', { key: 'watchMessage', className: 'jmw-cred-msg ok' }, state.watchMessage) : null,
+          state.watchError ? h('div', { key: 'watchError', className: 'jmw-cred-msg err' }, state.watchError) : null,
+        ]),
+        credGroup('patch', t('patchTitle'), [
+          h('div', { key: 'path', className: 'jmw-cred-row' }, [
+            h('span', { key: 'label', className: 'jmw-cred-label' }, t('patchPathLabel')),
+            h('code', { key: 'value', className: 'jmw-cred-path' }, patchFile?.patchPath || t('patchMissingPath')),
+          ]),
+          patchFile?.patchPath
+            ? h('div', { key: 'pathActions', className: 'jmw-cred-actions' }, [
+              h('button', {
+                key: 'copy',
+                type: 'button',
+                className: 'jmw-cred-btn',
+                style: BTN_PLAIN,
+                onClick: () => { void copyPath(); },
+              }, state.copied ? t('patchCopied') : t('patchCopy')),
+            ])
+            : null,
+          patchFile?.patchPath
+            ? h('div', { key: 'actions', className: 'jmw-cred-actions' }, [
+              h('button', {
+                key: 'open',
+                type: 'button',
+                className: 'jmw-cred-btn primary',
+                style: BTN_PRIMARY,
+                disabled: state.openBusy !== '' || patchFile.patchExists === false,
+                onClick: () => { void openPatch('default'); },
+              }, t('patchOpen')),
+              patchFile.canChoose === true
+                ? h('button', {
+                  key: 'choose',
+                  type: 'button',
+                  className: 'jmw-cred-btn',
+                  style: BTN_PLAIN,
+                  disabled: state.openBusy !== '',
+                  onClick: () => { void openPatch('choose'); },
+                }, t('patchChoose'))
+                : null,
+              h('button', {
+                key: 'reveal',
+                type: 'button',
+                className: 'jmw-cred-btn',
+                style: BTN_PLAIN,
+                disabled: state.openBusy !== '' || patchFile.patchExists === false,
+                onClick: () => { void openPatch('reveal'); },
+              }, t('patchReveal')),
+            ])
+            : null,
+          // 编辑器直选：只画 host 探测到的那几个（探不到就不画，免得点了必然报错）。
+          patchFile?.patchPath
+            ? h('div', { key: 'editors', className: 'jmw-cred-form' }, [
+              h('div', { key: 'editorsLabel', className: 'jmw-cred-label' }, t('patchEditors')),
+              (patchFile.editors ?? []).length
+                ? h('div', { key: 'editorsRow', className: 'jmw-cred-actions' }, (patchFile.editors ?? []).map((editor) => {
+                  const preferred = Boolean(editor) && editor.id === patchFile.preferredEditor;
+                  return h('button', {
+                    key: `editor-${editor?.id}`,
+                    type: 'button',
+                    className: `jmw-cred-btn${preferred ? ' primary' : ''}`,
+                    style: preferred ? BTN_PRIMARY : BTN_PLAIN,
+                    disabled: state.openBusy !== '' || patchFile.patchExists === false,
+                    onClick: () => { void openPatch('app', String(editor?.id ?? '')); },
+                  }, `${editor?.label ?? ''}${preferred ? t('patchEditorPreferred') : ''}`);
+                }))
+                : h('div', { key: 'editorsNone', className: 'jmw-cred-hint' }, t('patchNoEditors')),
+            ])
+            : null,
+          // 自由输入：应用名或完整路径，作为**一个** argv 参数交给 host（host 不拼 shell）。
+          patchFile?.patchPath
+            ? h('div', { key: 'custom', className: 'jmw-cred-form' }, [
+              h('label', { key: 'customLabel', className: 'jmw-cred-label', htmlFor: 'jmw-cred-custom-app' }, t('patchCustomLabel')),
+              h('input', {
+                key: 'customInput',
+                id: 'jmw-cred-custom-app',
+                className: 'jmw-cred-input',
+                type: 'text',
+                autoComplete: 'off',
+                spellCheck: false,
+                placeholder: t('patchCustomPlaceholder'),
+                value: state.customApp,
+                onInput: (event) => setState((prev) => ({ ...prev, customApp: event?.target?.value ?? '' })),
+              }),
+              h('div', { key: 'customActions', className: 'jmw-cred-actions' }, [
+                h('button', {
+                  key: 'customOpen',
+                  type: 'button',
+                  className: 'jmw-cred-btn',
+                  style: BTN_PLAIN,
+                  disabled: state.openBusy !== '' || String(state.customApp ?? '').trim() === ''
+                    || patchFile.patchExists === false,
+                  onClick: () => { void openPatch('custom', String(state.customApp ?? '').trim()); },
+                }, t('patchCustomOpen')),
+              ]),
+            ])
+            : null,
+          patchFile && patchFile.patchExists === false
+            ? h('div', { key: 'missing', className: 'jmw-cred-hint warn' }, t('patchMissingFile'))
+            : null,
+          h('div', { key: 'hint', className: 'jmw-cred-hint' }, t('patchHint')),
+          state.patchMessage ? h('div', { key: 'message', className: 'jmw-cred-msg ok' }, state.patchMessage) : null,
+          state.patchError ? h('div', { key: 'error', className: 'jmw-cred-msg err' }, state.patchError) : null,
+        ]),
+        h('div', { key: 'other', className: 'jmw-cred-note' }, t('credOther')),
+      ]);
+    }
+
+    /* -------------------------------------------------------------- 装配 */
+
+    return {
+      inject: ['slots', 'remote'],
+      apply(ctx) {
+        runtime.ctx = ctx;
+
+        const styleOff = injectStyle();
+        if (typeof ctx.effect === 'function') ctx.effect(() => styleOff, 'jira-work-overview: stylesheet');
+
+        const locale = typeof ctx.get === 'function' ? ctx.get('locale') : undefined;
+        if (locale && typeof locale.register === 'function') {
+          try {
+            locale.register(NS, { zh: M.zh, en: M.en });
+            const bound = typeof locale.bind === 'function' ? locale.bind(NS) : undefined;
+            const translate = typeof bound === 'function' ? bound : (bound?.t ?? bound?.translate);
+            if (typeof translate === 'function') hostLocale = (key, params) => translate(key, params);
+            // 语言服务是权威来源：先取当前值（设置 → 通用 → 语言），再跟着切换重渲染。
+            const active = typeof locale.getSnapshot === 'function' ? locale.getSnapshot()?.active : undefined;
+            setLanguage(active ?? '');
+          } catch {
+            hostLocale = undefined;
+          }
+        }
+        // 切语言时重渲染，并且下一次请求会把新语言带给 host 半边，两边文案保持一致。
+        if (typeof ctx.on === 'function') {
+          try {
+            ctx.on('locale/change', (current) => setLanguage(current?.active ?? current));
+          } catch {
+            // 没有这个事件也不影响：面板仍按浏览器语言渲染。
+          }
+        }
+
+        ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
+          name: 'sidebar.footer.action',
+          id: ENTRY_ID,
+          order: 30,
+          label: () => t('title'),
+        }, Entry));
+
+        ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+          name: 'shell.overlay',
+          id: PANEL_ID,
+          order: 30,
+          label: () => t('title'),
+        }, Panel));
+
+        // 插件详情页上的配置区（slots: plugins.bundle.config，key 是包名）——
+        // 这是最容易找到的入口：插件列表点进「Jira work overview」就能看到「Jira 令牌」这一段。
+        ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
+          name: 'plugins.bundle.config',
+          key: PLUGIN_ID,
+          order: 30,
+          locale: NS,
+          label: () => t('credTitle'),
+        }, CredentialSettings));
+
+        // 以及 bundle 里那一行自己的配置页（slots: plugins.row.config，key 是 `<包名>#<row id>`）：
+        // 注册后该行的标题会变成可点按钮（带一个 chevron），点进去是同一个组件。
+        ctx.slots.inject('plugins.row.config', () => ctx.slots.register({
+          name: 'plugins.row.config',
+          key: ROW_CONFIG_KEY,
+          order: 30,
+          locale: NS,
+          label: () => t('credTitle'),
+        }, CredentialSettings));
+
+        startWatchLoop(ctx);
+      },
+    };
+  },
+});

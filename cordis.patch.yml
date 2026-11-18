@@ -1,0 +1,15 @@
+# Insert the "Jira work overview" plugin row into the DSH profile.
+# 把「Jira work overview」作为 plugin row 插入 DSH profile。
+#
+# 这里只放**非机密、与站点无关**的默认值：
+#   - 你的 Jira 站点地址 / 登录邮箱 / 项目 / 看板：装上后在面板「配置」里填（或写在 profile 的
+#     cordis.patch.yml 覆盖项里）——baseUrl 是必填项，没填时工具会直接告诉你；
+#   - API token 存在 DSH 凭据库里，键名由 credentialKey 指定（desktop profile 的
+#     设置 → 凭据里能看到它是否已配置），永远不要写进这个文件。
+- insert:
+    - id: jira-work-overview
+      name: 'dsh-jira-work-overview'
+      config:
+        credentialKey: JIRA_API_TOKEN
+        maxResults: 0
+        timeoutMs: 30000

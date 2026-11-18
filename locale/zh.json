@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Jira work overview",
+    "description": "在 DSH 里查看指派给我的 Jira 工作项及其工作流状态。提供三个工具（jira_my_work 列未完成项并给出状态分布、jira_issue 读单条详情、jira_transition 预览或改状态）与一个 /jira 斜杠命令，另在左侧栏加一个可点击的入口：弹窗按迭代分组列出我未关闭的工作项、可折叠、可改状态，并在有新指派或状态变化时用角标与系统通知提示（macOS 走 osascript、Windows 走 PowerShell Toast、其它平台走 notify-send，失败静默）（本机轮询，Jira Cloud 没有给第三方 issue 事件的推送通道）。请求通过 HTTPS 只发往插件行上配置的 Jira 站点（站点地址由插件行配置，装上后在面板里填）；唯一的写操作是你在面板里主动改状态。API token 可写在插件配置的 apiToken、DSH 凭据库或 JIRA_API_TOKEN 环境变量中。界面文案跟随 DSH 的语言设置（目前随包中文 / 英文，其它语言回落到英文），Jira 返回的任务信息原样展示。"
+  }
+}

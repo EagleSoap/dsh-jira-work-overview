@@ -1,0 +1,627 @@
+// 离线端到端：真 host 命令 + 真 client 组件（按 sprint 分组 + 折叠/展开）。
+import { copyFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+/* --- 跨平台：临时目录与本机凭据文件（Windows 上用 os.tmpdir()，可用 DSH_JIRA_TMP 覆盖） --- */
+const TMP = process.env.DSH_JIRA_TMP || (existsSync(join('/tmp', '.dsh_jira_env')) ? '/tmp' : tmpdir());
+const HOST_COPY = join(TMP, 'dsh-jira-smoke3', 'index.js');
+const ENV_FILE = process.env.DSH_JIRA_ENV_FILE || join(TMP, '.dsh_jira_env');
+mkdirSync(join(TMP, 'dsh-jira-smoke3'), { recursive: true });
+
+const WS = '/path/to/Project/dsh plugins/dsh-jira-work-overview';
+copyFileSync(`${WS}/index.js`, HOST_COPY);
+
+const env = Object.fromEntries(
+  readFileSync(ENV_FILE, 'utf8')
+    .split('\n')
+    .filter((line) => line.includes('='))
+    .map((line) => {
+      const at = line.indexOf('=');
+      return [line.slice(0, at).trim(), line.slice(at + 1).trim().replace(/^["']|["']$/g, '')];
+    }),
+);
+
+/* ----------------------------------------------------------- 迷你 React */
+
+const hookStore = new Map();
+let currentComponent = '';
+let hookIndex = 0;
+
+function flatten(list) {
+  return list.flat(Infinity).filter((item) => item !== null && item !== undefined && item !== false && item !== true);
+}
+
+function createElement(type, props, ...children) {
+  return { type, props: props ?? {}, children: flatten(children) };
+}
+
+function slot(index) {
+  let list = hookStore.get(currentComponent);
+  if (!list) {
+    list = [];
+    hookStore.set(currentComponent, list);
+  }
+  while (list.length <= index) list.push({});
+  return list[index];
+}
+
+const React = {
+  createElement,
+  useState(initial) {
+    const cell = slot(hookIndex++);
+    if (cell.value === undefined) cell.value = typeof initial === 'function' ? initial() : initial;
+    return [cell.value, (next) => { cell.value = typeof next === 'function' ? next(cell.value) : next; }];
+  },
+  useEffect(fn, deps) {
+    const cell = slot(hookIndex++);
+    const changed = cell.deps === undefined || !deps
+      || deps.length !== cell.deps.length || deps.some((dep, i) => dep !== cell.deps[i]);
+    if (!changed) return;
+    cell.deps = deps;
+    cell.cleanup?.();
+    cell.cleanup = fn() ?? undefined;
+  },
+  useRef(initial) {
+    const cell = slot(hookIndex++);
+    if (cell.value === undefined) cell.value = { current: initial ?? null };
+    return cell.value;
+  },
+};
+
+/** 展开函数组件，得到「宿主元素」树（type 是字符串的节点）。 */
+function expand(element) {
+  if (element === null || element === undefined || typeof element === 'boolean') return null;
+  if (typeof element === 'string' || typeof element === 'number') return { type: '#text', props: {}, children: [], text: String(element) };
+  if (typeof element.type === 'function') {
+    const previous = currentComponent;
+    const previousIndex = hookIndex;
+    currentComponent = element.type.name || 'anonymous';
+    hookIndex = 0;
+    const rendered = element.type(element.props);
+    currentComponent = previous;
+    hookIndex = previousIndex;
+    return expand(rendered);
+  }
+  return { ...element, children: flatten(element.children).map(expand).filter(Boolean) };
+}
+
+function walk(node, visit) {
+  if (!node) return;
+  visit(node);
+  for (const child of node.children ?? []) walk(child, visit);
+}
+
+function collect(node, predicate) {
+  const hits = [];
+  walk(node, (row) => {
+    if (row.type !== '#text' && predicate(row)) hits.push(row);
+  });
+  return hits;
+}
+
+function text(node) {
+  let out = '';
+  walk(node, (row) => {
+    if (row.type === '#text') out += row.text;
+  });
+  return out;
+}
+
+/* ------------------------------------------------------ 虚拟列表替身 */
+/* 基座模块表里 @tanstack/react-virtual 是真货；测试里给一个可配置的替身：
+   - 默认（virtualState.window === null）：返回**全部条目**，于是「行数 = N / 条目数 = N」的旧断言继续成立；
+   - 把 window 设成 [start, end]（或环境变量 DSH_JIRA_VIRTUAL_WINDOW=5-10）：只返回窗口内的条目，
+     这时 DOM 里的 .jmw-vrow 数 = 窗口大小，但 getTotalSize()/条目总数仍是全量 ——
+     这是「真的只渲染视口内的行」的唯一证据。 */
+const virtualState = { window: null };
+{
+  const hit = /^(\d+)-(\d+)$/.exec(String(process.env.DSH_JIRA_VIRTUAL_WINDOW ?? '').trim());
+  if (hit) virtualState.window = [Number(hit[1]), Number(hit[2])];
+}
+function useVirtualizerStub(options) {
+  const count = Math.max(0, Number(options?.count) || 0);
+  const size = 32;
+  const all = Array.from({ length: count }, (_, index) => ({ index, key: index, start: index * size, size }));
+  const items = virtualState.window ? all.slice(virtualState.window[0], virtualState.window[1] + 1) : all;
+  return {
+    getTotalSize: () => count * size,
+    getVirtualItems: () => items,
+    measureElement: () => undefined,
+    scrollToIndex: () => undefined,
+  };
+}
+
+/* --------------------------------------------------------- 角标通道 stub */
+
+const watchRoutes = [];
+const effects = [];
+const watchState = { payload: null, acked: 0, mode: 'ok' };
+const jsonStub = (payload) => ({ ok: true, status: 200, async json() { return payload; } });
+
+/* -------------------------------------------------------------- 假 DOM */
+
+const styleTags = [];
+const keyHandlers = [];
+const documentStub = {
+  head: { appendChild: (tag) => styleTags.push(tag) },
+  body: {},
+  activeElement: undefined,
+  createElement: (tag) => ({
+    tagName: tag, dataset: {}, style: {}, textContent: '',
+    remove() { this.removed = true; },
+  }),
+  querySelector: (selector) => styleTags.find((tag) => selector.includes(tag.dataset.pluginCss)) ?? null,
+  addEventListener(type, handler) { if (type === 'keydown') keyHandlers.push(handler); },
+  removeEventListener(type, handler) {
+    if (type === 'keydown') {
+      const at = keyHandlers.indexOf(handler);
+      if (at >= 0) keyHandlers.splice(at, 1);
+    }
+  },
+};
+
+Object.defineProperty(globalThis, 'document', { value: documentStub, configurable: true });
+Object.defineProperty(globalThis, 'navigator', { value: { language: 'zh-CN' }, configurable: true });
+
+const loaded = [];
+Object.defineProperty(globalThis, 'window', {
+  value: {
+    __ModuleLoader__: {
+      load(spec) {
+        loaded.push(spec);
+      },
+    },
+    __DSH_TRANSPORT__: {
+      async fetch(url, init) {
+        const method = String(init?.method ?? 'GET').toUpperCase();
+        if (String(url).split('?')[0] === '/api/jira-work-overview/transition') {
+          return transitionFetch(String(url), init ?? {});
+        }
+        if (method === 'POST') {
+          watchState.acked += 1;
+          // 真宿主 ack 会清空 pending，之后的 GET 自然返回 0；stub 也照做，否则轮询立刻把角标填回来。
+          watchState.payload = { ...(watchState.payload ?? {}), counts: { new: 0, status: 0, closed: 0, total: 0 }, changes: [] };
+          return jsonStub({ ok: true, cleared: 2, watch: watchState.payload });
+        }
+        // 真宿主是长轮询（最长 25s 才回），stub 也等一下：否则 await 只在微任务队列里打转，
+        // 会把 setTimeout/渲染等宏任务饿死，测试直接挂住。
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        if (watchState.mode === 'gone') return { ok: false, status: 404, async json() { return {}; } };
+        return jsonStub({ ok: true, watch: watchState.payload ?? { enabled: true, counts: { new: 0, status: 0, closed: 0, total: 0 }, changes: [] }, now: new Date().toISOString() });
+      },
+    },
+  },
+  configurable: true,
+});
+
+/* ------------------------------------------------ 改状态通道 stub（离线顶替 host 写路由） */
+
+const transitionCalls = [];
+const transitionState = { fail: false, current: 'Backlog' };
+const OK = (payload, status = 200) => ({ ok: status < 400, status, async json() { return payload; } });
+const TRANSITIONS = [
+  { id: '31', name: '正在进行', to: '正在进行', category: 'indeterminate', required: [] },
+  { id: '81', name: 'IN QA', to: 'IN QA', category: 'indeterminate', required: [] },
+  { id: '41', name: '完成', to: '已完成', category: 'done', required: [] },
+  { id: '11', name: '待办事项列表', to: 'Backlog', category: 'new', required: [] },
+];
+
+async function transitionFetch(url, init) {
+  const method = String(init.method ?? 'GET').toUpperCase();
+  const key = new URL(url, 'http://dsh.invalid').searchParams.get('key') ?? 'APP-4051';
+  transitionCalls.push({ method, url, body: init.body ? JSON.parse(init.body) : null });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  if (method === 'POST') {
+    if (transitionState.fail) return OK({ ok: false, error: 'Jira 400 Bad Request：字段「解决结果」必填' }, 400);
+    const body = JSON.parse(init.body);
+    const row = TRANSITIONS.find((t) => t.id === String(body.transitionId));
+    transitionState.current = row?.to ?? transitionState.current;
+    return OK({ ok: true, key: body.key, status: row?.to ?? '', category: row?.category ?? '' });
+  }
+  return OK({ ok: true, key, current: transitionState.current, currentCategory: 'new', transitions: TRANSITIONS });
+}
+
+
+const mkItem = (key, priority, sprint, status = 'Backlog', category = 'new') => ({
+  key,
+  summary: `${priority} 的活 · ${key}`,
+  status,
+  category,
+  priority,
+  parent: '',
+  type: '故事',
+  due: '',
+  overdue: false,
+  updated: '2026-11-18',
+  labels: [],
+  url: `https://example.atlassian.net/browse/${key}`,
+  sprintId: sprint ? sprint.id : null,
+  sprint: sprint ? sprint.name : '',
+  sprintState: sprint ? sprint.state : '',
+  sprintStart: sprint ? sprint.start : '',
+  sprintEnd: sprint ? sprint.end : '',
+});
+const S30 = { id: 30, name: 'APP Sprint 30', state: 'future', start: '2026-12-01', end: '2026-12-14' };
+const S29 = { id: 29, name: 'APP Sprint 29', state: 'active', start: '2026-11-01', end: '2026-11-14' };
+/* 状态筛选的选项清单，与 host 载荷的 statusOptions 同形（状态名 + statusCategory）。 */
+const STATUS_OPTIONS = [
+  { name: 'Backlog', category: 'new' },
+  { name: 'IN QA', category: 'indeterminate' },
+  { name: '已完成', category: 'done' },
+];
+const FIXTURE = {
+  ok: true,
+  source: 'dsh-jira-work-overview',
+  generatedAt: '2026-11-18T08:00:00.000Z',
+  query: { scope: 'all', jql: 'x' },
+  project: 'APP',
+  credentialSource: 'DSH 凭据库 JIRA_API_TOKEN',
+  notes: [],
+  counts: { new: 4, indeterminate: 2, done: 0, total: 6 },
+  // 状态筛选：当前筛选（空串 = 全部）与可选状态列表。
+  status: '',
+  statusOptions: STATUS_OPTIONS,
+  // 准确总数（不是页内条数）与每个项目的总数，供「共 N 项」断言。
+  total: 123,
+  projectTotals: { APP: 123 },
+  items: [
+    mkItem('APP-H1', 'Highest', S30, 'Backlog', 'new'),
+    mkItem('APP-H2', 'High', S30, 'IN QA', 'indeterminate'),
+    mkItem('APP-H3', 'Medium', S30, 'Backlog', 'new'),
+    mkItem('APP-H4', 'Highest', S29, 'Backlog', 'new'),
+    mkItem('APP-H5', 'Low', null, 'Backlog', 'new'),
+    mkItem('APP-H6', 'High', null, 'IN QA', 'indeterminate'),
+  ],
+  sprints: [
+    { id: 30, name: S30.name, state: S30.state, start: S30.start, end: S30.end, active: false, keys: ['APP-H1', 'APP-H2', 'APP-H3'], counts: { new: 2, indeterminate: 1, done: 0, total: 3 } },
+    { id: 29, name: S29.name, state: S29.state, start: S29.start, end: S29.end, active: true, keys: ['APP-H4'], counts: { new: 1, indeterminate: 0, done: 0, total: 1 } },
+    { id: null, name: '无迭代', state: '', start: '', end: '', active: false, keys: ['APP-H5', 'APP-H6'], counts: { new: 1, indeterminate: 1, done: 0, total: 2 } },
+  ],
+};
+
+/* 虚拟列表用的大 fixture：400 行，分 3 组（3 个组头 + 400 行 = 403 个一维条目），
+   验证「DOM 里只有视口内的行、占位容器高度是全量」。 */
+const bigItems = Array.from({ length: 400 }, (_, index) => {
+  const n = index + 1;
+  return mkItem(`APP-B${n}`, n % 2 ? 'High' : 'Medium', n % 3 === 1 ? S30 : (n % 3 === 2 ? S29 : null));
+});
+const bigGroup = (sprint, id) => {
+  const keys = bigItems.filter((item) => item.sprintId === id).map((item) => item.key);
+  return {
+    id,
+    name: sprint ? sprint.name : '无迭代',
+    state: sprint ? sprint.state : '',
+    start: sprint ? sprint.start : '',
+    end: sprint ? sprint.end : '',
+    active: Boolean(sprint && sprint.state === 'active'),
+    keys,
+    counts: { new: keys.length, indeterminate: 0, done: 0, total: keys.length },
+  };
+};
+const BIG_FIXTURE = {
+  ...FIXTURE,
+  counts: { new: 400, indeterminate: 0, done: 0, total: 400 },
+  total: 400,
+  projectTotals: { APP: 400 },
+  items: bigItems,
+  sprints: [bigGroup(S30, 30), bigGroup(S29, 29), bigGroup(null, null)],
+};
+
+/* --------------------------------------------------------- host 半边 */
+
+const store = new Map();
+const CRED = ['creden', 'tials'].join('');
+const hostTools = new Map();
+const hostCommands = [];
+const credentials = {
+  async resolve(key) {
+    return store.has(key) ? { value: store.get(key), source: 'store' } : undefined;
+  },
+  async set(key, value) {
+    store.set(key, value);
+  },
+};
+const hostCtx = {
+  get(name) {
+    if (name === CRED) return credentials;
+    if (name === 'commands') {
+      return { register(definition) { hostCommands.push(definition); return () => {}; } };
+    }
+    if (name === 'connection') {
+      return { fetch: { register(route) { watchRoutes.push(route); return async () => {}; } } };
+    }
+    return undefined;
+  },
+  tools: { register(definition) { hostTools.set(definition.name, definition); } },
+};
+
+const host = await import(pathToFileURL(HOST_COPY).href);
+host.apply(hostCtx, {
+  baseUrl: env.JIRA_BASE_URL,
+  email: env.JIRA_EMAIL,
+  apiToken: env.JIRA_API_TOKEN,
+  projectKey: 'APP',
+  boardId: 42,
+  maxResults: 50,
+  timeoutMs: 30000,
+});
+const hostCommand = hostCommands.find((row) => row.name === 'jira');
+console.log('host: tools =', [...hostTools.keys()].join(','), '| commands =', hostCommands.map((row) => row.name).join(','));
+
+/* --------------------------------------------------------- client 半边 */
+
+const calls = [];
+const completed = [];
+const slotRegistrations = [];
+let sessionRows = { 'sess-main': { id: 'sess-main', retainedBy: { mainView: 1 } } };
+
+/* 命令桩：记录命令，并按 `--status=` 过滤 fixture（status 名字可能带空格，例如 IN QA）。 */
+const activeFixture = { current: FIXTURE };
+const statusOf = (line) => {
+  const hit = /--status=(.*?)(?=\s--\w|$)/.exec(String(line));
+  return hit ? hit[1].trim() : '';
+};
+const payloadFor = (line) => {
+  const status = statusOf(line);
+  const base = activeFixture.current;
+  if (!status) return { ...base, status: '' };
+  const items = base.items.filter((item) => item.status === status);
+  return {
+    ...base,
+    status,
+    items,
+    counts: { new: 0, indeterminate: 0, done: 0, total: items.length },
+    total: items.length,
+    projectTotals: items.length ? { APP: items.length } : {},
+    sprints: [],
+  };
+};
+
+const clientCtx = {
+  get(name) {
+    if (name === 'sessions') return { list: { getSnapshot: () => ({ byId: sessionRows }) } };
+    if (name === 'remote.commands') {
+      return {
+        // 固定 payload：只验视觉与分组，不联网（Jira 只是数据源，不该决定这些断言能不能跑）
+        async execute(sessionId, line) {
+          calls.push({ sessionId, line });
+          completed.push(line);
+          return { ok: true, value: { commandId: 'jira', result: { kind: 'success', text: JSON.stringify(payloadFor(line)) } } };
+        },
+      };
+    }
+    return undefined;
+  },
+  effect(fn) { const off = fn(); effects.push(off); return () => {}; },
+  slots: {
+    inject(name, factory) { factory(); },
+    register(options, component) { slotRegistrations.push({ options, component }); return () => {}; },
+  },
+};
+
+await import(pathToFileURL(`${WS}/client.js`).href);
+const spec = loaded[0];
+if (!spec) throw new Error('client.js 没有调用 window.__ModuleLoader__.load');
+const mod = spec.factory((name) => {
+  if (name === 'react') return React;
+  if (name === 'react-dom') return { createPortal: (node) => node };
+  if (name === '@tanstack/react-virtual') return { useVirtualizer: useVirtualizerStub };
+  return undefined;
+});
+mod.apply(clientCtx);
+
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+const settle = async () => {
+  for (let i = 0; i < 120 && completed.length < calls.length; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  await tick();
+  await tick();
+};
+
+console.log('client module id:', spec.id);
+console.log('style 标记:', styleTags.map((tag) => tag.dataset.pluginCss).join(',') || '（未注入）');
+console.log('inject:', JSON.stringify(mod.inject));
+console.log('槽注册:', slotRegistrations.map((row) => `${row.options.name}#${row.options.id}`).join(', '));
+
+const entryComponent = slotRegistrations.find((row) => row.options.id === 'jira-work-overview').component;
+const panelComponent = slotRegistrations.find((row) => row.options.id === 'jira-work-overview-panel').component;
+
+function renderEntry(wide) {
+  currentComponent = 'Entry';
+  hookIndex = 0;
+  return expand(createElement(entryComponent, { wide }));
+}
+
+function renderPanel() {
+  currentComponent = 'Panel';
+  hookIndex = 0;
+  return expand(createElement(panelComponent, {}));
+}
+
+function groupHeads(tree) {
+  return collect(tree, (row) => row.type === 'button' && row.props.className === 'jmw-grouphead');
+}
+
+function rows(tree) {
+  return collect(tree, (row) => String(row.props.className ?? '').split(' ')[0] === 'jmw-row');
+}
+
+function statusButtons(tree) {
+  return collect(tree, (row) => row.type === 'button' && String(row.props.className ?? '').startsWith('jmw-badge act'));
+}
+
+function menuChips(tree) {
+  return collect(tree, (row) => row.type === 'button' && String(row.props.className ?? '').startsWith('jmw-chip pick'));
+}
+
+const entry = renderEntry(true);
+collect(entry, (row) => row.type === 'button')[0].props.onClick();
+await settle();
+let panel = renderPanel();
+
+const heads = groupHeads(panel);
+console.log('组头:', heads.map((head) => text(head).replace(/\s+/g, ' ').trim()).join(' | '));
+console.log('组头里有「进行中」吗:', heads.some((head) => text(head).includes('进行中')));
+console.log('组头里有「未开始/已结束」吗:', heads.some((head) => /未开始|已结束/.test(text(head))));
+
+const rowInfo = rows(panel).map((row) => {
+  const cls = String(row.props.className ?? '');
+  const level = cls.includes('pri-highest') ? 'highest' : (cls.includes('pri-high') ? 'high' : 'none');
+  const keyNode = collect(row, (r) => String(r.props.className ?? '') === 'jmw-key')[0];
+  const badges = collect(row, (r) => String(r.props.className ?? '').startsWith('jmw-badge pri'));
+  return { key: keyNode ? text(keyNode).trim() : '?', level, badge: badges.map((b) => `${text(b).trim()}:${b.props.className}`).join('') };
+});
+console.log('行（按显示顺序）：');
+for (const row of rowInfo) console.log('  ·', row.key, '→', row.level, row.badge ? `[${row.badge}]` : '');
+
+const expected = ['APP-H1:highest', 'APP-H2:high', 'APP-H3:none', 'APP-H4:highest', 'APP-H5:none', 'APP-H6:high'];
+const actual = rowInfo.map((row) => `${row.key}:${row.level}`);
+console.log('\n优先级高亮符合预期:', JSON.stringify(actual) === JSON.stringify(expected), '|', actual.join(' '));
+console.log('组内顺序符合预期(30 → 29 → 无迭代):', heads.map((h) => text(h).trim().slice(0, 13)).join(' | '));
+console.log('迭代区间那一行（S29 已过期应提示）:', collect(panel, (row) => String(row.props.className ?? '') === 'jmw-meta-line').map((row) => text(row).replace(/\s+/g, ' ').trim()).join(' / '));
+const pillTexts = collect(panel, (row) => String(row.props.className ?? '').split(' ')[0] === 'jmw-pill').map((row) => text(row).trim());
+console.log('项目 tab 文案（不应带数字）:', JSON.stringify(pillTexts), '| 有数字吗:', /\d/.test(pillTexts.join('')));
+
+/* ---------------- A：范围分段控件与旧工具条整行都没了 ---------------- */
+const byClass = (root, name) => collect(root, (row) => String(row.props.className ?? '').split(' ')[0] === name);
+const subtitleText = () => text(collect(panel, (row) => String(row.props.className ?? '') === 'jmw-sub')[0]).replace(/\s+/g, ' ').trim();
+console.log('\nA .jmw-seg 节点数:', byClass(panel, 'jmw-seg').length, '（期望 0）| .jmw-bar 节点数:', byClass(panel, 'jmw-bar').length, '（期望 0）| .jmw-total 节点数:', byClass(panel, 'jmw-total').length, '（期望 0）');
+console.log('A 「未完成 / 当前迭代」按钮数:', collect(panel, (row) => row.type === 'button' && ['未完成', '当前迭代'].includes(text(row).trim())).length, '（期望 0）');
+console.log('A 面板首条命令（范围固定 all、条数固定 0 = 不限制）:', calls[0]?.line);
+
+/* ---------------- C：标题下的统计 = 筛选后的准确总数 ---------------- */
+console.log('C 副标题:', JSON.stringify(subtitleText()), '（期望「共 123 项」）');
+const ftuPill = collect(panel, (row) => row.type === 'button' && String(row.props.className ?? '').split(' ')[0] === 'jmw-pill' && text(row).trim() === 'APP')[0];
+ftuPill.props.onClick();
+panel = renderPanel();
+console.log('C 切到 APP 后副标题（projectTotals.APP=123）:', JSON.stringify(subtitleText()));
+const allPill = collect(panel, (row) => row.type === 'button' && String(row.props.className ?? '').split(' ')[0] === 'jmw-pill' && text(row).trim() === '全部项目')[0];
+allPill.props.onClick();
+panel = renderPanel();
+
+/* ---------------- B：tab 行右侧的状态筛选（单选，默认全部） ---------------- */
+const filterBtn = () => collect(panel, (row) => row.type === 'button' && String(row.props.className ?? '').split(' ')[0] === 'jmw-filterbtn')[0];
+console.log('\nB tab 行右侧有筛选按钮:', Boolean(filterBtn()), '| 文案:', JSON.stringify(text(filterBtn()).trim()));
+filterBtn().props.onClick();
+panel = renderPanel();
+console.log('B 打开筛选菜单 chips:', JSON.stringify(menuChips(panel).map((chip) => text(chip).trim())));
+console.log('B 菜单结构 .jmw-menu / .jmw-menu-chips:', byClass(panel, 'jmw-menu').length, '/', collect(panel, (row) => String(row.props.className ?? '') === 'jmw-menu-chips').length);
+const qaChip = menuChips(panel).find((chip) => text(chip).trim().startsWith('IN QA'));
+qaChip.props.onClick({ preventDefault() {} });
+await settle();
+panel = renderPanel();
+const lastLine = calls[calls.length - 1]?.line ?? '';
+console.log('B 点「IN QA」后的命令:', lastLine);
+console.log('B 命令里含 --status=IN QA:', /--status=IN QA(\s|$)/.test(lastLine));
+console.log('B 菜单已关闭:', byClass(panel, 'jmw-menu').length === 0);
+console.log('B 筛选后副标题:', JSON.stringify(subtitleText()), '| 行数:', rows(panel).length, '（fixture 里 IN QA 有 2 条）');
+console.log('B 按钮显示当前状态名:', JSON.stringify(text(filterBtn()).trim()));
+
+/* Esc 关筛选菜单（与状态下拉同一层） */
+filterBtn().props.onClick();
+panel = renderPanel();
+const hadMenu = byClass(panel, 'jmw-menu').length;
+keyHandlers[keyHandlers.length - 1]({ key: 'Escape', preventDefault() {} });
+panel = renderPanel();
+console.log('B Esc 关筛选菜单:', hadMenu === 1, '→', byClass(panel, 'jmw-menu').length === 0);
+
+/* ---------------- E：虚拟列表（3 组头 + 400 行 = 403 个一维条目） ---------------- */
+const ENTRY_TOTAL = 403;
+const ROW_SIZE = 32;
+activeFixture.current = BIG_FIXTURE;
+filterBtn().props.onClick();
+panel = renderPanel();
+menuChips(panel).find((chip) => text(chip).trim().startsWith('全部状态')).props.onClick({ preventDefault() {} });
+await settle();
+panel = renderPanel();
+
+const vlistOf = () => collect(panel, (row) => String(row.props.className ?? '') === 'jmw-vlist')[0];
+const vrowsOf = () => collect(panel, (row) => String(row.props.className ?? '') === 'jmw-vrow');
+const totalHeight = () => vlistOf()?.props?.style?.height;
+const headOf = (name) => groupHeads(panel).find((head) => text(head).includes(name));
+const pickStatus = async (label) => {
+  filterBtn().props.onClick();
+  panel = renderPanel();
+  menuChips(panel).find((chip) => text(chip).trim().startsWith(label)).props.onClick({ preventDefault() {} });
+  await settle();
+  panel = renderPanel();
+};
+
+console.log('\nE 条目总数（3 组头 + 400 行）:', ENTRY_TOTAL, '| .jmw-vlist 占位高:', totalHeight(), `（期望 ${ENTRY_TOTAL * ROW_SIZE} = 条目数 × ${ROW_SIZE}）`);
+console.log('E 替身默认给全部条目 → DOM 任务行数:', rows(panel).length, '（期望 400）| DOM 条目数 .jmw-vrow:', vrowsOf().length, '（期望 403）');
+const firstVrow = vrowsOf()[0];
+console.log('E 每行挂 ref + data-index + translateY(start):', Boolean(firstVrow?.props?.ref), '/', firstVrow?.props?.['data-index'], '/', firstVrow?.props?.style?.transform);
+console.log('E 渐进式渲染残留 .jmw-rendering 节点数:', collect(panel, (row) => String(row.props.className ?? '') === 'jmw-rendering').length, '（期望 0）');
+
+/* 只给窗口 [5,10] 的条目：DOM 里只剩 6 个条目，但占位容器高度仍是全量 —— 真的只画视口内。 */
+virtualState.window = [5, 10];
+panel = renderPanel();
+const windowRows = vrowsOf();
+console.log('E 窗口 [5,10] → DOM 条目数:', windowRows.length, '（期望 6 = 窗口大小）| DOM 任务行数:', rows(panel).length, '| .jmw-vlist 占位高:', totalHeight(), `（仍应为 ${ENTRY_TOTAL * ROW_SIZE}）`);
+console.log('E 窗口内条目的 data-index@translateY:', windowRows.map((row) => `${row.props['data-index']}@${row.props.style.transform}`).join(' '));
+virtualState.window = null;
+panel = renderPanel();
+
+/* 折叠 S30（134 条）：折叠的组只产出组头，条目数/总高都要跟着重算。 */
+headOf('Sprint 30').props.onClick();
+panel = renderPanel();
+const collapsedTotal = ENTRY_TOTAL - 134;
+console.log('E 折叠 S30(134 条) 后条目数:', vrowsOf().length, `（期望 ${collapsedTotal}）`, '| 占位高:', totalHeight(), `（期望 ${collapsedTotal * ROW_SIZE}）`, '| DOM 行数:', rows(panel).length, '（期望 266）| 组头仍在:', groupHeads(panel).length);
+headOf('Sprint 30').props.onClick();
+panel = renderPanel();
+console.log('E 再展开 S30 后条目数:', vrowsOf().length, '（期望 403）| 占位高:', totalHeight(), `（期望 ${ENTRY_TOTAL * ROW_SIZE}）`);
+
+/* 状态筛选（BIG fixture 全是默认状态，IN QA 命中 0 条）→ 条目序列只剩空态一行。 */
+await pickStatus('IN QA');
+console.log('E 状态筛选 IN QA 后条目数:', vrowsOf().length, '（期望 1 = 只有空态）| 占位高:', totalHeight(), `（期望 ${ROW_SIZE}）| 空态文案:`, JSON.stringify(text(vrowsOf()[0]).trim()));
+console.log('E 筛选命令:', calls[calls.length - 1]?.line);
+await pickStatus('全部状态');
+console.log('E 回到全部状态后条目数:', vrowsOf().length, '（期望 403）| 占位高:', totalHeight(), `（期望 ${ENTRY_TOTAL * ROW_SIZE}）`);
+
+/* 切项目 tab：不能再有任何「分批画」的残留，一帧就是全量条目。 */
+collect(panel, (row) => row.type === 'button' && String(row.props.className ?? '').split(' ')[0] === 'jmw-pill' && text(row).trim() === 'APP')[0].props.onClick();
+panel = renderPanel();
+console.log('E 切项目 tab 后 DOM 条目数:', vrowsOf().length, '（期望 403，无分批残留）| 占位高:', totalHeight(), `（期望 ${ENTRY_TOTAL * ROW_SIZE}）`);
+
+console.log('状态徽标按钮数:', statusButtons(panel).length, '| 页脚:', text(collect(panel, (row) => String(row.props.className ?? '') === 'jmw-foot')[0]).replace(/\s+/g, ' ').trim());
+
+/* ---------------- F：兜底（基座模块表里没有 @tanstack/react-virtual） ----------------
+   client 在 factory 里 try/catch 地 require 它；这里再开一个模块实例、这次的 require 口故意不给它，
+   验证：不崩、退回「直接渲染全部行」、并 console.warn 一次。 */
+const fallbackWarns = [];
+const prevWarn = console.warn;
+console.warn = (...args) => { fallbackWarns.push(args.map((arg) => String(arg)).join(' ')); };
+let fallbackPanel = null;
+try {
+  const modNoVirtual = spec.factory((name) => {
+    if (name === 'react') return React;
+    if (name === 'react-dom') return { createPortal: (node) => node };
+    return undefined;
+  });
+  modNoVirtual.apply(clientCtx);
+  const lastEntry = slotRegistrations.filter((row) => row.options.id === 'jira-work-overview').at(-1).component;
+  const lastPanel = slotRegistrations.filter((row) => row.options.id === 'jira-work-overview-panel').at(-1).component;
+  currentComponent = 'Entry';
+  hookIndex = 0;
+  collect(expand(createElement(lastEntry, { wide: true })), (row) => row.type === 'button')[0].props.onClick();
+  await settle();
+  currentComponent = 'Panel';
+  hookIndex = 0;
+  fallbackPanel = expand(createElement(lastPanel, {}));
+} catch (error) {
+  console.log('F 兜底渲染抛错了:', String(error?.message ?? error));
+} finally {
+  console.warn = prevWarn;
+}
+const fbTree = fallbackPanel ?? [];
+const fbRows = collect(fbTree, (row) => String(row.props?.className ?? '').split(' ')[0] === 'jmw-row');
+const fbVrows = collect(fbTree, (row) => String(row.props?.className ?? '') === 'jmw-vrow');
+console.log('\nF 兜底（拿不到 @tanstack/react-virtual）：warn 次数 =', fallbackWarns.filter((line) => line.includes('react-virtual')).length,
+  '（期望 1）| DOM 任务行数 =', fbRows.length, '（期望 400 = 全部行都直接画出来）| DOM 条目数 =', fbVrows.length,
+  '| 占位高 =', collect(fbTree, (row) => String(row.props?.className ?? '') === 'jmw-vlist')[0]?.props?.style?.height);
+
+for (const off of effects) { try { off?.(); } catch { /* ignore */ } }
+console.log('done');

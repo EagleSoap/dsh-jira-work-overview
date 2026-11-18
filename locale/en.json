@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Jira work overview",
+    "description": "See the Jira work items assigned to me, with their live workflow status, inside DSH. Adds three tools (jira_my_work lists my unfinished items with a status breakdown, jira_issue reads one issue, jira_transition previews or applies a status change), a /jira slash command, and a clickable left-sidebar entry whose popup groups my open items by sprint with collapse/expand and an inline status dropdown. A new assignment or status change shows up as a sidebar badge plus a system notification (osascript on macOS, a PowerShell toast on Windows, notify-send elsewhere; failures are silent) (local polling — Jira Cloud offers no push channel for third-party issue events). Requests go over HTTPS only to the Jira site configured on the plugin row (the site URL comes from the plugin row; set it in the panel); the only write is a status change you trigger yourself from the panel. Set the API token through the plugin configuration (apiToken), the DSH credential store, or the JIRA_API_TOKEN environment variable. Plugin copy follows the DSH language setting (Chinese and English ship with the plugin; other languages fall back to English), while Jira-returned task data is always shown verbatim."
+  }
+}
