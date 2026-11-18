@@ -115,12 +115,14 @@ function text(node) {
    - 把 window 设成 [start, end]（或环境变量 DSH_JIRA_VIRTUAL_WINDOW=5-10）：只返回窗口内的条目，
      这时 DOM 里的 .jmw-vrow 数 = 窗口大小，但 getTotalSize()/条目总数仍是全量 ——
      这是「真的只渲染视口内的行」的唯一证据。 */
-const virtualState = { window: null };
+const virtualState = { window: null, options: [] };
 {
   const hit = /^(\d+)-(\d+)$/.exec(String(process.env.DSH_JIRA_VIRTUAL_WINDOW ?? '').trim());
   if (hit) virtualState.window = [Number(hit[1]), Number(hit[2])];
 }
 function useVirtualizerStub(options) {
+  // 把 client 真正传下来的选项留档：G 段直接断言 getItemKey / estimateSize 按条目身份与类型走。
+  virtualState.options.push(options);
   const count = Math.max(0, Number(options?.count) || 0);
   const size = 32;
   const all = Array.from({ length: count }, (_, index) => ({ index, key: index, start: index * size, size }));
@@ -588,6 +590,93 @@ console.log('E 切项目 tab 后 DOM 条目数:', vrowsOf().length, '（期望 4
 
 console.log('状态徽标按钮数:', statusButtons(panel).length, '| 页脚:', text(collect(panel, (row) => String(row.props.className ?? '') === 'jmw-foot')[0]).replace(/\s+/g, ' ').trim());
 
+/* ---------------- G：虚拟列表的条目身份与估算（2026-11-19 修的两处） ----------------
+   `@tanstack/react-virtual` 的默认 getItemKey 是 `index => index`（defaultKeyExtractor），实测高度按
+   **下标**缓存。折叠 / 展开会让同一串下标换成完全不同的条目：折叠前 index 1 是任务行（约 32px），
+   折叠后 index 1 变成第二个组头（约 64px）—— 按下标复用旧高度，组头就被压在一起，「日期和标题」
+   错位（用户实际报的「折叠全部后样式错误」）。estimateSize 也必须按条目类型分开，否则滚动中每量到
+   一个组头整列就往下窜一截。这里把 client 交给 useVirtualizer 的选项抓下来，把这两件事钉死。 */
+let failed = 0;
+const check = (ok, label, detail) => {
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}${detail === undefined ? '' : ` | ${detail}`}`);
+  if (!ok) failed += 1;
+};
+
+/* 整屏遮罩不许再出现 backdrop-filter：整窗大小的 backdrop-filter 在 macOS + Electron 上滚动重绘时
+   会让整屏闪一下（用户报的「滚动列表时屏幕闪烁」）。遮罩本身只压暗、不模糊。
+   注释里会提到这个词，所以先把 CSS 注释剥掉再查声明。 */
+const css = styleTags.map((tag) => tag.textContent ?? '').join('\n');
+const cssBody = css.replace(/\/\*[\s\S]*?\*\//g, '');
+check(
+  !/backdrop-filter/.test(cssBody),
+  'G 整屏遮罩不再用 backdrop-filter（macOS 滚动整屏闪的直接成因）',
+  (cssBody.match(/backdrop-filter[^;}]*/g) ?? []).join(' / ') || '无',
+);
+check(
+  /\.jmw-mask\{[^}]*background:var\(--dsw-alias-bg-mask-1/.test(css) && /\.jmw-credmask\{[^}]*background:var\(--dsw-alias-bg-mask-1/.test(css),
+  'G 两处遮罩仍然压暗（只是去掉了模糊）',
+);
+
+panel = renderPanel();
+const expandedOptions = virtualState.options.at(-1);
+const keyOf = (options, index) => (typeof options?.getItemKey === 'function' ? options.getItemKey(index) : undefined);
+const estimateOf = (options, index) => (typeof options?.estimateSize === 'function' ? options.estimateSize(index) : NaN);
+const keysExpanded = Array.from({ length: expandedOptions?.count ?? 0 }, (_, index) => keyOf(expandedOptions, index));
+const groupKeysExpanded = keysExpanded.filter((key) => String(key).startsWith('g:'));
+check(typeof expandedOptions?.getItemKey === 'function', 'G 交给 useVirtualizer 的 getItemKey 存在（库默认 index => index）');
+check(
+  estimateOf(expandedOptions, 0) > estimateOf(expandedOptions, 1),
+  'G estimateSize 按条目类型分开（组头 > 任务行）',
+  `组头 ${estimateOf(expandedOptions, 0)} / 任务行 ${estimateOf(expandedOptions, 1)}`,
+);
+check(
+  String(keyOf(expandedOptions, 0)).startsWith('g:') && String(keyOf(expandedOptions, 1)).startsWith('i:'),
+  'G 展开态条目 key 是 g:组 / i:任务 的身份 key',
+  `${keyOf(expandedOptions, 0)} / ${keyOf(expandedOptions, 1)}`,
+);
+console.log('G 展开态 条目数/组头数:', expandedOptions?.count, '/', groupKeysExpanded.length, '| 前 4 个 key:', JSON.stringify(keysExpanded.slice(0, 4)));
+
+/* 点「折叠全部」：条目序列从 (3 组头 + 400 行) 变成 3 个组头，下标 1 的身份必然换人。 */
+const collapseAllBtn = collect(panel, (row) => row.type === 'button' && String(row.props.className ?? '') === 'jmw-linkbtn')[0];
+check(text(collapseAllBtn).trim() === '折叠全部', 'G tab 行右侧的按钮当前是「折叠全部」', JSON.stringify(text(collapseAllBtn).trim()));
+collapseAllBtn.props.onClick();
+panel = renderPanel();
+const collapsedOptions = virtualState.options.at(-1);
+const keysCollapsed = Array.from({ length: collapsedOptions?.count ?? 0 }, (_, index) => keyOf(collapsedOptions, index));
+check(
+  collapsedOptions?.count === groupKeysExpanded.length,
+  'G 折叠全部后条目数 = 组头数',
+  `${collapsedOptions?.count} vs ${groupKeysExpanded.length}`,
+);
+check(
+  keysCollapsed.every((key) => String(key).startsWith('g:')),
+  'G 折叠全部后每个条目都是组头 key',
+  JSON.stringify(keysCollapsed),
+);
+check(
+  keysCollapsed.every((key) => keysExpanded.includes(key)),
+  'G 折叠后每个 key 在展开态都存在（高度按身份复用，不会串位）',
+  keysCollapsed.join(', '),
+);
+check(
+  keysExpanded[1] !== keysCollapsed[1],
+  'G 下标 1 的身份确实变了（按下标缓存就是这次错位的成因）',
+  `${keysExpanded[1]} → ${keysCollapsed[1]}`,
+);
+check(
+  estimateOf(collapsedOptions, 1) > estimateOf(expandedOptions, 1),
+  'G 折叠后下标 1 按组头估算（不再套任务行的 32）',
+  `${estimateOf(collapsedOptions, 1)} vs ${estimateOf(expandedOptions, 1)}`,
+);
+/* 复原：这时按钮是「展开全部」，点回去，别把后面的 F 段留在折叠态。 */
+collect(panel, (row) => row.type === 'button' && String(row.props.className ?? '') === 'jmw-linkbtn')[0].props.onClick();
+panel = renderPanel();
+check(
+  (virtualState.options.at(-1)?.count ?? 0) === expandedOptions?.count,
+  'G 再点「展开全部」条目数复原',
+  `${virtualState.options.at(-1)?.count} vs ${expandedOptions?.count}`,
+);
+
 /* ---------------- F：兜底（基座模块表里没有 @tanstack/react-virtual） ----------------
    client 在 factory 里 try/catch 地 require 它；这里再开一个模块实例、这次的 require 口故意不给它，
    验证：不崩、退回「直接渲染全部行」、并 console.warn 一次。 */
@@ -624,4 +713,6 @@ console.log('\nF 兜底（拿不到 @tanstack/react-virtual）：warn 次数 =',
   '| 占位高 =', collect(fbTree, (row) => String(row.props?.className ?? '') === 'jmw-vlist')[0]?.props?.style?.height);
 
 for (const off of effects) { try { off?.(); } catch { /* ignore */ } }
+console.log(failed === 0 ? '\n=== visual G 段（条目身份 / 估算）：全部通过 ===' : `\n=== visual G 段（条目身份 / 估算）：${failed} 项失败 ===`);
 console.log('done');
+process.exit(failed === 0 ? 0 : 1);

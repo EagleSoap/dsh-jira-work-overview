@@ -67,6 +67,9 @@ window.__ModuleLoader__.load({
     // 虚拟列表：所有行都拍平成一维 entries 交给 @tanstack/react-virtual，只渲染视口内的行。
     // 行高估算 32px；overscan 10 行；行高真被测量（状态菜单展开、换行）时由 measureElement 回填。
     const ROW_ESTIMATE = 32;
+    // 组头（标题 + 下面「迭代区间」那一行）本来就比任务行高一倍左右。估算要不分开，滚动中每量到一个
+    // 组头整列就要往下窜一次（体感就是列表在抖）。估算只影响**还没被量到**的行，量过的以真实高度为准。
+    const GROUP_ESTIMATE = 64;
     const ROW_OVERSCAN = 10;
 
     /** 条数语义的客户端归一化（与 host 侧 index.js 的 normalizeLimit 同步）：
@@ -867,8 +870,11 @@ window.__ModuleLoader__.load({
     /* -------------------------------------------------------------- 样式 */
 
     const CSS = `
+/* 整屏遮罩只压暗，**不要加 backdrop-filter**：整窗大小的 backdrop-filter 在 macOS + Electron 上会在
+   滚动重绘时让整屏闪一下（用户 2026-11-19 报的「滚动列表时屏幕闪烁」）。2px 高斯加在这层 24% 黑上
+   本来就几乎看不出来，去掉没有观感损失，却拿掉了整窗合成层。 */
 .jmw-mask{position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;padding:24px;
-  background:var(--dsw-alias-bg-mask-1,rgba(0,0,0,.24));backdrop-filter:blur(2px)}
+  background:var(--dsw-alias-bg-mask-1,rgba(0,0,0,.24))}
 .jmw-card{display:flex;flex-direction:column;width:min(780px,100%);max-height:min(82vh,760px);overflow:hidden;
   color:var(--dsw-alias-label-primary,#1b1d22);background:var(--dsw-alias-bg-layer-2,#fff);
   border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.1));border-radius:var(--dsw-radius-lg,16px);
@@ -1107,9 +1113,10 @@ window.__ModuleLoader__.load({
 .jmw-btn.ghost{background:transparent;color:var(--dsw-alias-label-secondary,#5c6270)}
 .jmw-btn.ghost:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06))}
 .jmw-btn.ghost.on{color:#4d6bfe;background:color-mix(in srgb,#4d6bfe 12%,transparent)}
-/* 令牌 / 配置 弹窗：宿主不给背板，整层由插件自己画（遮罩 + 居中卡片） */
+/* 令牌 / 配置 弹窗：宿主不给背板，整层由插件自己画（遮罩 + 居中卡片）。
+   遮罩同样不加 backdrop-filter —— 理由见文件开头 .jmw-mask 上面那条注释。 */
 .jmw-credmask{position:fixed;inset:0;z-index:1200;display:flex;align-items:center;justify-content:center;padding:24px;
-  background:var(--dsw-alias-bg-mask-1,rgba(0,0,0,.24));backdrop-filter:blur(2px)}
+  background:var(--dsw-alias-bg-mask-1,rgba(0,0,0,.24))}
 .jmw-credmodal{display:flex;flex-direction:column;gap:2px;width:min(620px,100%);max-height:min(80vh,660px);overflow:auto;
   padding:16px 18px 18px;border-radius:var(--dsw-radius-lg,16px);background:var(--dsw-alias-bg-layer-2,#fff);
   border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.1));box-shadow:var(--dsw-elevation-prominent,0 18px 48px rgba(0,0,0,.24));
@@ -1471,7 +1478,13 @@ window.__ModuleLoader__.load({
       const rowVirtualizer = useVirtual({
         count: entries.length,
         getScrollElement: () => bodyRef.current,
-        estimateSize: () => ROW_ESTIMATE,
+        // 关键：量出来的高度必须跟着**条目身份**走，不能跟着下标走（库的默认 getItemKey 是 `index => index`，
+        // 见 defaultKeyExtractor）。折叠 / 展开会让同一串下标换成完全不同的条目：折叠前 index 1 是任务行
+        // （约 32px），折叠后 index 1 变成第二个组头（约 64px）—— 按下标复用旧高度，组头就会被压在一起，
+        // 「日期和标题」错位（用户 2026-11-19 报的「折叠全部后样式错误」）。元素缓存 elementsCache 同理。
+        getItemKey: (index) => entries[index]?.key ?? index,
+        // 组头 / 任务行分开估，把「量到真实高度之前」的位移压到最小；量过的行以真实高度为准。
+        estimateSize: (index) => (entries[index]?.kind === 'group' ? GROUP_ESTIMATE : ROW_ESTIMATE),
         overscan: ROW_OVERSCAN,
         // 行高真的会变（状态下拉展开、摘要换行）：把行元素交回去重新量。
         measureElement: (element) => (element && typeof element.getBoundingClientRect === 'function'

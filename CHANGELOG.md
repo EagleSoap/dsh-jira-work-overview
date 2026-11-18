@@ -4,6 +4,18 @@ All notable changes to **dsh-jira-work-overview** are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The first 25 releases were built in a single day, so the dates are real but the cadence was not: each entry lists what changed, not how long it took.
 
+## [0.13.3] - 2026-11-19
+
+### Fixed
+
+- **「折叠全部」后组头的标题与日期错位。** `@tanstack/react-virtual` 的默认 `getItemKey` 是 `index => index`（库里的 `defaultKeyExtractor`），实测行高按**下标**缓存。折叠 / 展开会让同一串下标换成完全不同的条目：折叠前下标 1 是任务行（约 32px），折叠后下标 1 变成第二个组头（约 64px），复用旧高度就把两个组头压在一起 —— 上一个组头底部的「迭代区间」（日期）和下一个组头的标题叠住了。现在 `getItemKey` 按条目身份取（`g:<组 id>` / `i:<issue key>`），折叠前后同一个组头命中它自己那份实测高度（元素缓存 `elementsCache` 同理）。
+- 虚拟列表的 `estimateSize` 改成按条目类型估（组头 64px / 任务行 32px）：此前一律按 32px 估，滚动中每量到一个组头整列就往下窜一截，`scrollHeight` 与滚动条滑块跟着跳。
+- **滚动列表时 macOS 整屏闪一下。** 面板与令牌弹窗的整屏遮罩（`.jmw-mask`、`.jmw-credmask`）用了 `backdrop-filter:blur(2px)`：整窗大小的 backdrop-filter 在 macOS + Electron 上会在滚动重绘时让整屏闪一下。遮罩现在只压暗（`--dsw-alias-bg-mask-1`）不再模糊 —— 2px 高斯加在 24% 黑上本来就几乎看不出来，去掉没有观感损失却拿掉了整窗合成层。
+
+### Added
+
+- `test/dsh-jira-visual.mjs` 新增 G 段（`PASS`/`FAIL` + 退出码）：钉死「条目 key 跟着身份走」「折叠前后同一个 key 能复用高度」「estimateSize 按类型分开」「两处遮罩里没有 backdrop-filter 声明」。
+
 ## [0.13.2] - 2026-11-19
 
 ### Fixed

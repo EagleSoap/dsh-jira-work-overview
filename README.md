@@ -128,7 +128,7 @@ The host polls `assignee = currentUser() AND statusCategory != Done` every `watc
 | Open `cordis.patch.yml` | `open` / `open -R` / osascript app chooser | `cmd /c start` / `rundll32 … OpenAs_RunDLL` / `explorer /select,` | `xdg-open` |
 | Host paths | POSIX | avoid spaces in the install path — DSH records it as a `link:` dependency | POSIX |
 
-The web half only uses standard React/DOM APIs (`backdrop-filter`, `color-mix`, `createPortal` are supported on all three).
+The web half only uses standard React/DOM APIs (`color-mix`, `createPortal` are supported on all three).
 
 ## Internationalization
 
