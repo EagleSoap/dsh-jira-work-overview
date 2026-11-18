@@ -12,3 +12,7 @@ dist/
 # local scratch
 tmp/
 *.tmp
+
+# local, machine-specific agent context (never published)
+AGENTS.local.md
+CLAUDE.local.md
