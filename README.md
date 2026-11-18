@@ -4,6 +4,10 @@ Show **your** Jira work items — with their real workflow status — inside [De
 
 > 中文说明见 [README.zh.md](README.zh.md) · Changelog: [CHANGELOG.md](CHANGELOG.md) · License: [MIT](LICENSE)
 
+<p align="center">
+  <img src="docs/images/panel.png" width="780" alt="The Jira panel inside DSH: rows grouped by sprint, with status chips, High/Highest highlights, project tabs and a single-select status filter">
+</p>
+
 ---
 
 ## What you get
@@ -42,6 +46,8 @@ Or do it in the UI: left icon rail → **Plugins** → install, and paste the sa
 
 Installing adds `dsh-jira-work-overview` to your profile's bundle list and inserts the plugin row declared in `cordis.patch.yml`. The host then serves the web half as a plugin bundle — **refresh the page** (Cmd/Ctrl+R) and the sidebar entry appears.
 
+<img src="docs/images/sidebar-entry.png" width="248" alt="The 'My Jira work items' entry above Settings in the left sidebar, showing an unread badge">
+
 ## First-run configuration
 
 The bundled `cordis.patch.yml` deliberately contains **no site-specific values**, so nothing of the author's Jira account is shipped. Open the panel, click **配置 / Configure** in the panel header, and fill in:
@@ -76,6 +82,8 @@ Prefer files? Add an override row to your profile's `cordis.patch.yml` (this is 
 - The header shows the **accurate total** for the current project + status, straight from Jira's `approximate-count`.
 - Click a **status chip** on any row to move the issue; the list reloads. **Esc** closes the top-most layer (status menu → configure dialog → panel).
 - The list is **virtualized**: thousands of rows scroll smoothly because only the visible ones are in the DOM.
+
+<img src="docs/images/panel-watch.png" width="780" alt="The live-change banner and a row with its status dropdown open (To Do / In Progress / IN QA / Done)">
 
 ### Slash command
 
@@ -161,6 +169,7 @@ dsh-jira-work-overview/
 ├── cordis.patch.yml  the plugin row this bundle inserts (neutral defaults only)
 ├── locale/{zh,en}.json  plugin-list title/description (file name = language id, en.json required)
 ├── icon.svg          plugin-list icon (36×36, transparent, theme-friendly strokes)
+├── docs/images/      README screenshots, rendered by `test/dsh-jira-shot.mjs`
 └── test/             offline + real-Jira suites
 ```
 
@@ -173,7 +182,10 @@ ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-credential.mjs  # offline: config pa
 ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-i18n.mjs        # offline: language matrix + dict parity
 ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-transition.mjs  # real Jira (read-only + failure paths)
 ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-status.mjs      # real Jira (skips itself when unreachable)
+ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-shot.mjs        # regenerate docs/images (headless Chrome, fake data)
 ```
+
+The screenshots are generated offline too: `test/dsh-jira-shot.mjs` renders the real `client.js` components with the real plugin CSS and a fixed set of **made-up** APP/OPS issues, serializes them to static HTML and lets headless Chrome shoot them — so the images never contain a real site, account or issue. Run it with `--lang en,zh`, `--theme dark`, `--only panel|panel-watch|sidebar-entry` or `--out <dir>`; it prints `SKIP:` and exits 0 when no Chrome is installed.
 
 The host half imports `@deepseek-ai/schemastery`, which only resolves inside the app, so the suites copy `index.js` next to a copy of that dependency in a temp dir (`DSH_JIRA_TMP` overrides the location). Real-Jira suites read a token from `DSH_JIRA_ENV_FILE` (default `$TMP/.dsh_jira_env`, `chmod 600`) and **skip** when Jira is unreachable instead of reporting a false regression.
 

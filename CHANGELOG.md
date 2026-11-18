@@ -4,6 +4,14 @@ All notable changes to **dsh-jira-work-overview** are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The first 25 releases were built in a single day, so the dates are real but the cadence was not: each entry lists what changed, not how long it took.
 
+## [Unreleased]
+
+### Added
+
+- README 的产品截图（`docs/images/{panel,panel-watch,sidebar-entry}{,.zh}.png`，浅色主题、中英各一套），插在 README.md / README.zh.md 的开头、安装（左侧栏入口）和面板小节里。图是**离线生成**的：真 `client.js` 组件 + 真插件 CSS + 一套**虚构**的 APP/OPS 工单，序列化成静态 HTML 后用无头 Chrome 截图 —— 所以图里不会出现真实站点、账号或 issue 摘要。
+- `test/dsh-jira-shot.mjs`：上面那套图的生成器（离线，不联网；`--lang en,zh` / `--theme light|dark` / `--only …` / `--out <目录>`，找不到 Chrome 时打印 `SKIP:` 并以 0 退出）。
+- `package.json` 的 `files` 加上 `docs`，让 npm 包里的 README 也能显示这些图片。
+
 ## [0.13.3] - 2026-11-19
 
 ### Fixed

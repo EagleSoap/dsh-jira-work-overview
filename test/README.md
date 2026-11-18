@@ -24,6 +24,21 @@ Three older suites (`dsh-jira-client.mjs`, `dsh-jira-client2.mjs`, `dsh-jira-wat
 
 `dsh-jira-smoke.mjs`, `dsh-jira-smoke3.mjs`, `dsh-jira-json.mjs`, `dsh-jira-sprint.mjs` and `dsh-jira-due.mjs` are the original probes from the first day (they print a report instead of asserting). They are kept because they are handy one-off diagnostics (`json` = raw `--json` payload, `sprint` = sprint field per issue, `due` = overdue issues across a project).
 
+## Screenshots
+
+`dsh-jira-shot.mjs` is not a suite — it generates the README images in `docs/images/` and prints what it wrote. It is offline in the same way the visual suite is (real `client.js` components + the CSS they inject, driven by the mini React stand-in), then serializes the element tree to static HTML and shoots it with headless Chrome:
+
+```bash
+BIN="/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness"
+ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-shot.mjs                    # en + zh, light
+ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-shot.mjs --theme dark       # writes *-dark.png
+ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-shot.mjs --only panel-watch
+```
+
+- The data is a fixed set of **made-up** APP/OPS issues (`demoPayload()`), so a shot can never leak a real site, account or issue summary — the empty theme variables fall back to the plugin's own colours if `app.asar` cannot be read.
+- `--lang en,zh`, `--theme light|dark`, `--only panel|panel-watch|sidebar-entry`, `--out <dir>` (default `docs/images`). Chrome is looked up at `/Applications/Google Chrome.app/…` (override with `DSH_JIRA_CHROME`); without it the script prints `SKIP:` and exits 0.
+- Inside the page CSS it neutralizes the panel's full-screen mask (`.jmw-mask{position:absolute;background:transparent}`) and drops a fake sidebar rail behind `sidebar-entry`, so the shots read as product UI rather than a floating overlay.
+
 ## Environment
 
 - **Host-half import**: the suites copy `index.js` next to a copy of `@deepseek-ai/schemastery` in a temp dir. Override the location with `DSH_JIRA_TMP`; the default is `/tmp` when `/tmp/.dsh_jira_env` exists, otherwise `os.tmpdir()`.

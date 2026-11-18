@@ -41,6 +41,7 @@
     "README.zh.md",
     "CHANGELOG.md",
     "LICENSE",
+    "docs",
     "test"
   ],
   "engines": {

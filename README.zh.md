@@ -2,6 +2,10 @@
 
 在 DSH 里查看**指派给我的 Jira 工作项**以及它们的实时工作流状态，用于快速回答「我这个迭代还要做什么」「哪些已经开发完在等测试」。
 
+<p align="center">
+  <img src="docs/images/panel.zh.png" width="780" alt="DSH 里的 Jira 面板：按迭代分组的行、状态徽标、High/Highest 底色、项目 tab 与单选状态筛选">
+</p>
+
 ## 提供的工具
 
 | 工具 | 作用 |
@@ -40,8 +44,15 @@ all    : assignee = currentUser() ORDER BY updated DESC
 ## 左侧栏面板
 
 插件还有一个浏览器半边（`client.js`）：在**左侧栏底部、「设置」上方**加入口「Jira work overview」，
-点一下在页面中央弹出浮层。浮层里第一行是**项目 tab** + 右侧的**状态筛选**与「展开全部 / 折叠全部」，
+点一下在页面中央弹出浮层。
+
+<img src="docs/images/sidebar-entry.zh.png" width="248" alt="左侧栏「Jira work overview」入口，带未读角标">
+
+浮层里第一行是**项目 tab** + 右侧的**状态筛选**与「展开全部 / 折叠全部」，
 标题下面是「共 N 项」，右上角可刷新，点背板或按 Esc 关闭。
+
+<img src="docs/images/panel-watch.zh.png" width="780" alt="实时变更横幅与展开的状态流转下拉（待办 / 进行中 / IN QA / 已完成）">
+
 **查询范围固定为全部**（`assignee = currentUser()`，含已完成 / 已关闭）：原来的「未完成 / 全部」分段控件已按用户
 要求删除，想只看某一种状态就用 tab 行右侧的「筛选」（单选，默认「全部状态」）。
 **项目 tab**：把这次结果里真正出现的项目（issue key 前缀，跨项目查询）列成一排、每个 tab 带条数；
@@ -365,8 +376,13 @@ ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-visual.mjs       # 纯离线：优�
 ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-status.mjs       # 真 Jira：列表 / 状态筛选 / 状态下拉 / 优先级 / 切筛选中断旧请求
 ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-credential.mjs   # 真 host 路由 + 假凭据库 + 假 Jira：令牌 / 邮箱 / 条数 / 监视
 ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-transition.mjs   # host 侧：流转列表与失败路径（不真写）
-ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-watch.mjs        # 监视通道：长轮询 / 角标 / 标记已读
+ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-shot.mjs         # 重新生成 docs/images 里的 README 截图（无头 Chrome + 虚构数据）
 ```
+
+`test/dsh-jira-shot.mjs` 出的图和这套离线脚本同源：**真 `client.js` 组件 + 真插件 CSS + 固定的一套虚构 APP/OPS 工作项**，
+序列化成静态 HTML 后交给无头 Chrome 截图，所以图上不会出现任何真实站点、账号或 issue。
+参数：`--lang en,zh`（默认两个都出）、`--theme dark`（默认浅色，深色加 `-dark` 后缀）、`--only panel|panel-watch|sidebar-entry`、`--out <目录>`；
+找不到 Chrome 时打印 `SKIP:` 并以 0 退出。
 
 约定与坑：
 

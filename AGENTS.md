@@ -18,6 +18,7 @@ DSH serves. There is no bundler, no `lib/`, no dependencies for the client half.
 | `locale/{en,zh}.json` | Plugin-list metadata (title + description) only; runtime copy lives in the dictionaries |
 | `icon.svg` | Plugin icon (`./icon` export) |
 | `test/*.mjs` | Plain Node scripts (no framework). See `test/README.md` |
+| `docs/images/*.png` | README screenshots — generated, never hand-edited; regenerate with `test/dsh-jira-shot.mjs` |
 | `CHANGELOG.md` | Keep a Changelog, one entry per released version |
 | `README.md` / `README.zh.md` | User docs (English first, Chinese mirror) |
 
