@@ -3,7 +3,7 @@
 在 DSH 里查看**指派给我的 Jira 工作项**以及它们的实时工作流状态，用于快速回答「我这个迭代还要做什么」「哪些已经开发完在等测试」。
 
 <p align="center">
-  <img src="docs/images/panel.zh.png" width="780" alt="DSH 里的 Jira 面板：按迭代分组的行、状态徽标、High/Highest 底色、项目 tab 与单选状态筛选">
+  <img src="docs/images/panel.zh.png" width="1040" alt="DSH 里的 Jira 面板：按迭代分组的行、状态徽标、High/Highest 底色、项目 tab 与单选状态筛选">
 </p>
 
 ## 提供的工具
@@ -51,7 +51,7 @@ all    : assignee = currentUser() ORDER BY updated DESC
 浮层里第一行是**项目 tab** + 右侧的**状态筛选**与「展开全部 / 折叠全部」，
 标题下面是「共 N 项」，右上角可刷新，点背板或按 Esc 关闭。
 
-<img src="docs/images/panel-watch.zh.png" width="780" alt="实时变更横幅与展开的状态流转下拉（待办 / 进行中 / IN QA / 已完成）">
+<img src="docs/images/panel-watch.zh.png" width="1040" alt="实时变更横幅与展开的状态流转下拉（待办 / 进行中 / IN QA / 已完成）">
 
 **查询范围固定为全部**（`assignee = currentUser()`，含已完成 / 已关闭）：原来的「未完成 / 全部」分段控件已按用户
 要求删除，想只看某一种状态就用 tab 行右侧的「筛选」（单选，默认「全部状态」）。

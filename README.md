@@ -5,7 +5,7 @@ Show **your** Jira work items — with their real workflow status — inside [De
 > 中文说明见 [README.zh.md](README.zh.md) · Changelog: [CHANGELOG.md](CHANGELOG.md) · License: [MIT](LICENSE)
 
 <p align="center">
-  <img src="docs/images/panel.png" width="780" alt="The Jira panel inside DSH: rows grouped by sprint, with status chips, High/Highest highlights, project tabs and a single-select status filter">
+  <img src="docs/images/panel.png" width="1040" alt="The Jira panel inside DSH: rows grouped by sprint, with status chips, High/Highest highlights, project tabs and a single-select status filter">
 </p>
 
 ---
@@ -83,7 +83,7 @@ Prefer files? Add an override row to your profile's `cordis.patch.yml` (this is 
 - Click a **status chip** on any row to move the issue; the list reloads. **Esc** closes the top-most layer (status menu → configure dialog → panel).
 - The list is **virtualized**: thousands of rows scroll smoothly because only the visible ones are in the DOM.
 
-<img src="docs/images/panel-watch.png" width="780" alt="The live-change banner and a row with its status dropdown open (To Do / In Progress / IN QA / Done)">
+<img src="docs/images/panel-watch.png" width="1040" alt="The live-change banner and a row with its status dropdown open (To Do / In Progress / IN QA / Done)">
 
 ### Slash command
 
