@@ -84,6 +84,16 @@ contains one — every fixture token and host is fake (`ATATT3xFfGF0…`, `examp
 `CHANGELOG.md` entry, the tag and the GitHub Release happen only when the maintainer asks for a release —
 one iteration may collect several changes that ship as a single version. When that go-ahead comes:
 
+0. **Freeze the release content first, and tag exactly that commit.** The GitHub tag and the npm tarball
+   must contain the same bytes: bump `package.json.version`, write the `CHANGELOG.md` entry, finish the
+   README (install spec, `publishConfig`) *before* tagging — publishing npm afterwards from a later commit
+   leaves GitHub and npm showing two different `README.md` / `CHANGELOG.md` / `package.json` for the same
+   version. If that already happened, move the tag onto the commit you packed from (`git tag -f vX.Y.Z
+   <sha>` → `git push --force-with-lease=refs/tags/vX.Y.Z:<old sha> origin refs/tags/vX.Y.Z`); the GitHub
+   Release follows the tag name. Verify with a fresh anonymous clone at the tag:
+   `git -c credential.helper= clone --depth 1 --branch vX.Y.Z <url> tag` and `cmp` every file listed in
+   `files` against the extracted npm tarball — `codeload…/tar.gz/refs/tags/vX.Y.Z` may still serve a
+   **cached** archive for a while, so do not trust it right after moving a tag.
 1. Bump `package.json.version`, add the `CHANGELOG.md` entry, `git add -A && git commit` (if the release
    bundles work already on `main`, fold the `[Unreleased]` notes into the new version section so the
    release notes match the tag's content).
