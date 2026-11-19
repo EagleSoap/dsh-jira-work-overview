@@ -92,12 +92,23 @@ one iteration may collect several changes that ship as a single version. When th
    what changed, the copy-paste install spec, requirements, link to the changelog). For a release that is
    **not** the newest, pass `--latest=false`; if the tag is not at `HEAD`, create it locally first
    (`git tag -a vX.Y.Z <sha> -m … && git push origin vX.Y.Z`) — `gh --target <short sha>` fails.
+4. `npm publish` (the `publishConfig` in `package.json` pins `https://registry.npmjs.org` — the machine's
+   default registry is a mirror, so without it the upload goes to the wrong place). Two things to know:
+   the registry may accept the upload as a **staged** publish instead of making it live — you then see
+   `409 Conflict - Cannot publish over previously staged version "X.Y.Z"` on a retry, the package page
+   shows a `0.0.0-stage` placeholder (its readme says "awaiting a staged release"), and the real version
+   appears only after a maintainer **approves** it with 2FA (npmjs.com → the package's *Staged Packages*
+   tab → Approve; the button stays disabled until npm's malware scan finishes and the page auto-refreshes
+   every minute). `npm stage list` may report nothing even while the version is staged, so trust the
+   registry state, not the CLI. **Verify before reporting success**: `npm view <pkg>@X.Y.Z dist.shasum`
+   must equal the shasum of your local `npm pack`, and `npm view <pkg> dist-tags` must point `latest` at
+   the new version — a successful-looking `npm publish` proves nothing.
 
 ## Install spec (how users get it)
 
 ```bash
+plugin_manager install_bundle(target="dsh-jira-work-overview")                   # npm, live since 0.14.0
 plugin_manager install_bundle(target="github:EagleSoap/dsh-jira-work-overview")  # no npm release needed
-plugin_manager install_bundle(target="dsh-jira-work-overview")                   # npm, published from 0.14.0
 ```
 
 The client half needs no build; DSH serves the declared `./client` file.
