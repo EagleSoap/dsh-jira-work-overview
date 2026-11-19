@@ -902,6 +902,9 @@ function normalizeConfig(config) {
   // 测试钩子：给了就代替「扫盘找编辑器」（配置卡片里没有这一项，只给离线测试用）。
   const onDetectEditors = read('onDetectEditors');
   if (typeof onDetectEditors === 'function') settings.onDetectEditors = onDetectEditors;
+  // 测试钩子：把后台监视的 state 交出去（离线测试用它手动 poll，不等真实间隔）。
+  const onWatchState = read('onWatchState');
+  if (typeof onWatchState === 'function') settings.onWatchState = onWatchState;
   // 保留原始 config：volatile 引用会被 Loader 就地把新值写进去，所以这是「实时值」的来源。
   settings.live = raw;
   settings.overrides = {};
@@ -1277,6 +1280,8 @@ function startWatcher(ctx, jira, settings) {
     pending: [],
     seen: new Map(),
     waiters: new Set(),
+    /** 本机自己刚改过的状态：key → { from, to, category, at }，见 noteSelfApplied。 */
+    selfApplied: new Map(),
   };
 
   let stopped = false;
@@ -1305,13 +1310,21 @@ function startWatcher(ctx, jira, settings) {
 
   const tick = async () => {
     try {
-      // 每次轮询前同步语言：通知标题 / 正文用的是此刻的设置。
-      jira.useLang();
-      await pollWatch(jira, state);
+      await state.poll();
     } catch {
       /* pollWatch 已经把失败记进 state.lastError */
     }
     schedule(state.intervalMs);
+  };
+
+  /**
+   * 跑一轮轮询。定时器走它；离线测试也直接调它（配合 onWatchState 钩子），
+   * 免得为了一次 diff 去等真实的 15s+ 间隔。
+   */
+  state.poll = async () => {
+    // 每次轮询前同步语言：通知标题 / 正文用的是此刻的设置。
+    jira.useLang();
+    await pollWatch(jira, state);
   };
 
   /** 配置变了就重排下一次检查（面板里的配置表单保存后会调）。 */
@@ -1352,7 +1365,103 @@ function startWatcher(ctx, jira, settings) {
     /* effect 不可用就算了，定时器继续跑 */
   }
 
+  // 测试钩子：把 watch state 交给离线测试，它就能自己调 state.poll() 推进 diff
+  //（与 onNotify / onOpenPatch / onDetectEditors 同一套手法，配置卡片里没有这一项）。
+  if (typeof settings.onWatchState === 'function') {
+    try {
+      settings.onWatchState(state);
+    } catch {
+      /* 钩子抛错不该影响监视 */
+    }
+  }
+
   return state;
+}
+
+// ---------------------------------------------- 自己改的状态不许再「被发现」
+//
+// 面板改状态成功后，界面上那一行已经就地变成新状态了（client 不再全量重拉列表）；
+// 但下一轮轮询还会看到「状态从 A 变成 B」，如果照常 diff，就会弹出「你刚改的那个任务状态变了」，
+// 还会往未读角标里加一条。所以写操作前后记一份期望值（key → from/to/分类），
+// 轮询 diff 命中这对 from/to 时直接吞掉，只把基线推到新值。
+//
+// 为什么是「按 from→to 对照」而不是「按 key 屏蔽一段时间」：后者会把别人真正改的也一起吞掉；
+// 这里只有「起点和终点都对得上自己这次流转」才静默，第三方把状态改到别处照样通知。
+
+/** 期望值的保鲜期：只有自己在写、而轮询还没跑到的情况才会留这么久（间隔可能被配得很大）。 */
+const SELF_APPLIED_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * 记下「这是本机自己发起的一次流转」。写在 POST **之前**：万一轮询正好在写往返期间读到新状态，
+ * 也能凭这份期望认出是自己改的。写失败由调用方 forgetSelfApplied 撤销。
+ */
+function noteSelfApplied(state, key, info) {
+  if (!state || !key || !(state.selfApplied instanceof Map)) return;
+  const to = String(info?.to ?? '').trim();
+  const from = String(info?.from ?? '').trim();
+  const category = String(info?.category ?? '').trim();
+  // 没有目标状态就没法对照，宁可不记，也不要留一条会误吞别人变化的空期望。
+  if (!to) return;
+  const at = Date.now();
+  const previous = state.selfApplied.get(key);
+  state.selfApplied.set(key, {
+    // 连续改同一个 key（A→B→C）时保留最早的 from：轮询的基线还是 A，一次就能吞掉整条链。
+    from: previous && at - Number(previous.at ?? 0) <= SELF_APPLIED_TTL_MS ? previous.from : from,
+    to,
+    category: category || previous?.category || '',
+    at,
+  });
+  // 顺手清掉过期的：条目只在「自己写了、轮询还没看到」时才存在，正常一轮轮询就消费掉了。
+  for (const [other, entry] of state.selfApplied) {
+    if (!entry || at - Number(entry.at ?? 0) > SELF_APPLIED_TTL_MS) state.selfApplied.delete(other);
+  }
+}
+
+/** 写失败了就把这份期望撤掉，别让它吞掉之后别人真改的那一下。 */
+function forgetSelfApplied(state, key) {
+  if (!state || !key || !(state.selfApplied instanceof Map)) return;
+  state.selfApplied.delete(key);
+}
+
+/** 取出一条还没过期的期望；过期就当场丢掉。 */
+function takeSelfApplied(state, key) {
+  if (!state || !key || !(state.selfApplied instanceof Map)) return undefined;
+  const entry = state.selfApplied.get(key);
+  if (!entry) return undefined;
+  if (Date.now() - Number(entry.at ?? 0) > SELF_APPLIED_TTL_MS) {
+    state.selfApplied.delete(key);
+    return undefined;
+  }
+  return entry;
+}
+
+/** 轮询看到 from → to 的状态变化：是我自己改的那一下吗？是就吞掉。 */
+function consumeSelfApplied(state, key, before, after) {
+  const entry = takeSelfApplied(state, key);
+  if (!entry) return false;
+  // from 没记下来（例如手工 POST 没带）就当通配；to 必须完全对得上，避免吞掉无关变化。
+  if (entry.from && entry.from !== before) return false;
+  if (entry.to !== after) return false;
+  state.selfApplied.delete(key);
+  return true;
+}
+
+/** issue 重新出现在「未完成」查询里：终点状态对得上自己这次写入，就不是「新指派」。 */
+function consumeSelfAppliedAppeared(state, key, after) {
+  const entry = takeSelfApplied(state, key);
+  if (!entry) return false;
+  if (entry.to !== after) return false;
+  state.selfApplied.delete(key);
+  return true;
+}
+
+/** issue 离开了「未完成」查询：如果正是自己把它改成了 Done 类状态，也静默。 */
+function consumeSelfAppliedClosed(state, key, before) {
+  const entry = takeSelfApplied(state, key);
+  if (!entry) return false;
+  if (entry.category !== 'done' || entry.to !== before) return false;
+  state.selfApplied.delete(key);
+  return true;
 }
 
 async function pollWatch(jira, state) {
@@ -1400,17 +1509,30 @@ async function pollWatch(jira, state) {
   for (const [key, row] of next) {
     const before = state.seen.get(key);
     if (!before) {
+      // 自己把一个 Done 的 issue 改回未完成：它会重新出现在「未完成」查询里，基线里没有它。
+      // 终点状态对得上自己这次写入，就不算「新指派」。
+      if (consumeSelfAppliedAppeared(state, key, row.status)) continue;
       changes.push({ kind: 'new', key, summary: row.summary, status: row.status, at });
     } else if (before.status !== row.status) {
+      // 自己刚在面板 / 工具里改的那一下：本地已经把界面改成新状态了，这里只把基线推到新值，
+      // 不当成「别人改的」再弹一次通知、再进一次未读角标。
+      if (consumeSelfApplied(state, key, before.status, row.status)) continue;
       changes.push({ kind: 'status', key, summary: row.summary, from: before.status, to: row.status, at });
     }
   }
   for (const [key, before] of state.seen) {
     if (!next.has(key)) {
+      // 自己把它改成 Done 类状态时，它会离开「未完成」查询：同样静默，不记 closed。
+      if (consumeSelfAppliedClosed(state, key, before.status)) continue;
       changes.push({ kind: 'closed', key, summary: before.summary, from: before.status, to: '', at });
     }
   }
   state.seen = next;
+  // 期望值的唯一用途是吞掉「下一轮 diff」；基线已经是期望的终点就没人可吞了（例如流转到同一个状态），
+  // 留着只会在很久以后误吞别人真改的变化。
+  for (const [key, entry] of state.selfApplied) {
+    if (next.get(key)?.status === entry?.to) state.selfApplied.delete(key);
+  }
   if (!changes.length) return;
 
   state.pending.push(...changes);
@@ -1663,16 +1785,32 @@ async function listTransitions(jira, key, signal) {
   };
 }
 
-/** 执行流转并回读新状态。 */
-async function applyTransition(jira, key, transitionId, signal) {
-  await jira.post(
-    `/rest/api/3/issue/${encodeURIComponent(key)}/transitions`,
-    { transition: { id: String(transitionId) } },
-    signal,
-  );
+/**
+ * 执行流转并回读新状态。
+ *
+ * `expect` 是「这次流转的起点 / 终点 / 目标状态分类」（面板 POST 会捎带，工具自己有），
+ * 只用于给后台轮询留一份期望：它命中下一轮的 diff 时静默吸收，不再通知「你把状态改了」。
+ */
+async function applyTransition(jira, key, transitionId, signal, expect) {
+  // 先记账再写：堵住「轮询正好在 POST 往返期间读到新状态」这个窗口。
+  noteSelfApplied(jira.watch, key, expect);
+  try {
+    await jira.post(
+      `/rest/api/3/issue/${encodeURIComponent(key)}/transitions`,
+      { transition: { id: String(transitionId) } },
+      signal,
+    );
+  } catch (error) {
+    forgetSelfApplied(jira.watch, key);
+    throw error;
+  }
+  // 写失败期望必须撤掉，别让它吞掉之后别人真改的那一下；写成功只是回读失败则留着（见上）。
   const issue = await jira.get(`/rest/api/3/issue/${encodeURIComponent(key)}`, { fields: 'status' }, signal);
   const status = issue?.fields?.status ?? {};
-  return { key, status: String(status?.name ?? ''), category: status?.statusCategory?.key ?? '' };
+  const result = { key, status: String(status?.name ?? ''), category: status?.statusCategory?.key ?? '' };
+  // 回读的状态才是真值（工作流可能改写目标状态），用它补齐/覆盖期望里的 to 与分类。
+  noteSelfApplied(jira.watch, key, { ...(expect ?? {}), to: result.status, category: result.category });
+  return result;
 }
 
 /** 把「流转 id / 目标状态名 / 流转名」都解析成同一个流转，便于人和模型随便写。 */
@@ -1683,6 +1821,19 @@ function matchTransition(list, wanted) {
     ?? list.find((row) => row.to.toLowerCase() === needle)
     ?? list.find((row) => row.name.toLowerCase() === needle)
     ?? list.find((row) => row.to.toLowerCase().includes(needle));
+}
+
+/**
+ * 面板 POST 捎带的流转信息（起点 / 终点 / 目标状态分类）。只做长度与控制字符清洗：
+ * 它不参与任何 Jira 请求，仅用于给后台轮询留一份「这是我改的」期望。
+ */
+function transitionHintOf(payload) {
+  const pick = (value) => {
+    if (typeof value !== 'string') return '';
+    const text = value.replace(/[\u0000-\u001f]/g, '').trim();
+    return text.length > 80 ? text.slice(0, 80) : text;
+  };
+  return { from: pick(payload?.from), to: pick(payload?.to), category: pick(payload?.category) };
 }
 
 /**
@@ -1712,7 +1863,9 @@ function registerTransitionRoute(ctx, jira) {
             if (id === undefined || id === null || String(id).trim() === '') {
               return jsonResponse({ ok: false, error: t('err.missingTransitionId') }, 400);
             }
-            const result = await applyTransition(jira, key, id, request.signal);
+            // 面板会捎带这次流转的 from/to/分类（它手上就有），用来给后台轮询做对照；
+            // 手工调用不带也没关系，回读之后的期望仍然只有「目标状态」这一项。
+            const result = await applyTransition(jira, key, id, request.signal, transitionHintOf(payload));
             return jsonResponse({ ok: true, ...result, watch: watchSnapshot(jira.watch) });
           }
           const key = String(new URL(request.url).searchParams.get('key') ?? '').trim().toUpperCase();
@@ -2521,7 +2674,11 @@ function transitionTool(jira, settings) {
         return lines.join('\n');
       }
 
-      const result = await applyTransition(jira, key, match.id, signal);
+      const result = await applyTransition(jira, key, match.id, signal, {
+        from: info.current,
+        to: match.to,
+        category: match.category,
+      });
       return [
         t('transition.updated', { key }),
         t('transition.updatedLine', { from: info.current || '—', to: result.status, id: match.id, name: match.name }),

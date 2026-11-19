@@ -764,21 +764,122 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /* ------------------------------------------------- 改状态后的就地更新 */
+    //
+    // 改状态成功后不再全量重拉列表：一次 `/jira --json all --limit=0` 会把几百条 issue 重新翻页拉一遍，
+    // 对「只变了一个状态」这件事太重。Jira 那边真正变的只有 status / statusCategory / updated，
+    // 其余字段（摘要、优先级、迭代、链接）本地都已经有了，所以就地改这一行 + 重算各级计数即可。
+    // 两级计数的口径与 host 的 buildWorkListJson / groupBySprint 一致：
+    // counts = 按 statusCategory 分桶 + total；sprints[].counts = 该组 keys 的分桶。
+
+    const CATEGORY_ORDER = ['new', 'indeterminate', 'done'];
+
+    function recountItems(items) {
+      const counts = { new: 0, indeterminate: 0, done: 0 };
+      for (const item of items) {
+        if (Object.prototype.hasOwnProperty.call(counts, item?.category)) counts[item.category] += 1;
+      }
+      return { ...counts, total: items.length };
+    }
+
+    /** 状态筛选菜单的选项：已见过的状态一个都不能少，新增的状态插进同一套排序（分类 → 名字）。 */
+    function mergeStatusOptions(options, name, category) {
+      const rows = (Array.isArray(options) ? options : [])
+        .filter((row) => row && typeof row.name === 'string' && row.name)
+        .map((row) => ({
+          name: row.name,
+          // 已有的分类以 host 为准；只有空分类才用这次回读的值补上。
+          category: typeof row.category === 'string' && row.category ? row.category : '',
+        }));
+      if (name) {
+        const hit = rows.find((row) => row.name === name);
+        if (hit) {
+          if (!hit.category && category) hit.category = category;
+        } else {
+          rows.push({ name, category: category || '' });
+        }
+      }
+      const rank = (row) => {
+        const index = CATEGORY_ORDER.indexOf(row.category);
+        return index < 0 ? CATEGORY_ORDER.length : index;
+      };
+      return rows.sort((a, b) => (rank(a) - rank(b)) || (a.name < b.name ? -1 : (a.name > b.name ? 1 : 0)));
+    }
+
+    /** 按 items 重算每个 sprint 分组的成员与分桶（成员消失的分组直接去掉，跟 host 一致）。 */
+    function recountSprints(sprints, items) {
+      const byKey = new Map(items.map((item) => [item.key, item]));
+      return (Array.isArray(sprints) ? sprints : [])
+        .map((group) => {
+          const keys = (Array.isArray(group?.keys) ? group.keys : []).filter((key) => byKey.has(key));
+          return { ...group, keys, counts: recountItems(keys.map((key) => byKey.get(key))) };
+        })
+        .filter((group) => group.keys.length > 0);
+    }
+
+    /**
+     * 把一次成功的流转合进当前载荷：只动这一行 + 各级计数。
+     * 返回 false 表示当前载荷里没有这条（列表还没加载完 / 已被别处刷掉），调用方退回 load()。
+     */
+    function applyLocalStatus(key, status, category) {
+      const data = snapshot.data;
+      if (!data || !Array.isArray(data.items)) return false;
+      const at = data.items.findIndex((item) => item?.key === key);
+      if (at < 0) return false;
+      const current = data.items[at];
+      const nextStatus = status || current.status;
+      const nextCategory = category || current.category || 'unknown';
+      let items = data.items.map((item) => (item === current
+        ? { ...item, status: nextStatus, category: nextCategory }
+        : item));
+      // 状态筛选开着、新状态又不再命中：跟重新查询一样，这条要从列表里消失（计数也要跟着减）。
+      const filter = typeof snapshot.status === 'string' ? snapshot.status : '';
+      const dropped = Boolean(filter && filter !== nextStatus);
+      if (dropped) items = items.filter((item) => item.key !== key);
+      const project = current.project || String(key).split('-')[0] || '';
+      let projectTotals = data.projectTotals;
+      if (dropped && data.projectTotals && typeof data.projectTotals === 'object') {
+        projectTotals = { ...data.projectTotals };
+        if (typeof projectTotals[project] === 'number') {
+          projectTotals[project] = Math.max(0, projectTotals[project] - 1);
+        }
+      }
+      patch({
+        data: {
+          ...data,
+          items,
+          counts: recountItems(items),
+          sprints: recountSprints(data.sprints, items),
+          statusOptions: mergeStatusOptions(data.statusOptions, nextStatus, nextCategory),
+          total: dropped && typeof data.total === 'number' ? Math.max(0, data.total - 1) : data.total,
+          projectTotals,
+        },
+      });
+      return true;
+    }
+
     async function applyStatus(key, row) {
       patch({ busyKey: key });
       patchStatuses(key, { error: '' });
+      // 面板手上就有「这次流转从哪到哪、属于哪个分类」，一并发给 host：它拿这对 from/to
+      // 在下一轮后台轮询里认出「这是我自己改的」，既不再弹通知，也不会往未读角标里加一条。
+      const from = snapshot.statuses[key]?.current ?? '';
       try {
         const response = await watchFetch(TRANSITION_PATH, {
           method: 'POST',
           headers: { accept: 'application/json', 'content-type': 'application/json' },
-          body: JSON.stringify({ key, transitionId: row.id }),
+          body: JSON.stringify({ key, transitionId: row.id, from, to: row.to, category: row.category }),
         });
         const payload = await response.json().catch(() => null);
         if (payload?.ok !== true) throw new Error(payload?.error || `HTTP ${response.status}`);
-        // 状态变了，分组/排序都会变：清掉流转缓存、关掉下拉、重新拉列表。
+        const status = String(payload.status ?? '').trim() || row.to || '';
+        // 关下拉、清流转缓存（下次展开按新状态重新列）；列表就地更新，不再全量重拉。
         patch({ menuKey: '', busyKey: '', statuses: {} });
-        flash(t('statusChanged', { key, status: payload.status || row.to }));
-        await load(snapshot.scope);
+        flash(t('statusChanged', { key, status }));
+        if (!applyLocalStatus(key, status, payload.category || row.category || '')) {
+          // 极少数情况（列表还没加载 / 这条已不在当前载荷里）才退回整表刷新。
+          await load(snapshot.scope);
+        }
       } catch (error) {
         patchStatuses(key, { error: t('statusFailed', { message: String(error?.message ?? error) }) });
         patch({ busyKey: '' });

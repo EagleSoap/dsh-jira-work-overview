@@ -6,10 +6,27 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
-面板的失败状态改成「说人话」：没配令牌时提示怎么配，而不是把一整句 host 报错糊在列表位置。
+改状态变轻了（不再为一行变化重拉整个列表），也不会再被自己的操作通知一次。
 
 ### Added
 
+- **改状态后不再全量重拉列表。** 面板以前写入成功后直接 `load()`，而 `/jira --json <scope> --limit=0` 会一直翻页把
+  几百条 issue 重新拉一遍；现在就地更新那一行（状态徽标、三色状态点），并按与 host 一致的口径重算 `counts`、
+  每个 `sprints[].counts`（组头的「未完成 N / 共 M」）、状态筛选菜单（新状态按「分类 → 名字」插入同一套排序）、
+  `total` 与 `projectTotals`；状态筛选开着时改到别的状态，该行就地消失、总数减一。只有当前载荷里找不到这个
+  key（列表还没加载完 / 已被别处刷掉）才回退到整表刷新。**行不重排**：`all` 范围按 `updated DESC` 排序，
+  本地更新拿不到新的 `updated`，这条会留在原位直到下一次整表刷新。
+- **自己改的状态不再触发通知。** 写入前后记一份期望（key → from / to / 分类，TTL 24h，写在 POST 之前以堵住轮询
+  并发窗口），下一轮后台轮询 diff 命中同一对 from → to 时静默吸收，只推进基线：不弹系统通知、不进未读角标、
+  不进「N 项新变化」横幅。面板 POST 额外捎带 `from` / `to` / `category`；`jira_transition`（`apply: true`）
+  用自己手上的 `current` 与目标状态走同一条路径。自己把 Done 的 issue 改回未完成（重新出现在「未完成」查询里）
+  也不算「新指派」。**对账只认这一对值**：同事把同一个 issue 改成别的状态照常通知；写失败立刻撤销期望。
+- `test/dsh-jira-visual.mjs` 新增 J 段：改状态后**没有**新的 `/jira` 命令、行内徽标 / 状态点 / 组头未完成数就地变、
+  POST 带上 `from` / `to` / 分类、新状态并入筛选菜单、状态筛选下改到别的状态该行消失且总数减一。
+- 新增离线套件 `test/dsh-jira-selfwatch.mjs`：用 fetch 桩驱动后台轮询的 diff——别人改照常通知、面板 / 工具自己改
+  静默且基线推进、同事紧接着改成别的状态仍然通知、写失败不留残影、期望表消费干净。
+- 测试钩子 `onWatchState`（与 `onNotify` / `onOpenPatch` / `onDetectEditors` 同一套手法，配置卡片里没有这一项）
+  和 `watchState.poll()`：离线测试直接推进一轮轮询，不用等真实的 15s+ 间隔。
 - **可分类的失败 + 对应的提示文案。** `--json`（面板专用）失败时 host 不再抛错，改为回一份形状正常的载荷带 `ok:false` 与 `error.code`：`no_credential` / `credential_unreadable` / `no_email` / `no_base_url` / `auth`（HTTP 401/403）/ `network` / `http` / `not_json` / `unknown`。面板按 code 显示标题 + 一句「怎么办」，`去配置` 直达令牌弹窗、`重试` 重新查询；只有 `auth` / `network` / `http` / `not_json` 这类需要看原文的，才把原始 message 以小字附在提示下面。类型是 host 给的稳定 code，不靠匹配报错文案（`CommandResult` 只有 `{kind,text}` 两个槽）。
 - 凭据库读不出来与「压根没配」分成两种（`credential_unreadable` / `no_credential`）：前者说明三条来源都没有值、且凭据服务本身报错，提示是「重新保存一次令牌」而不是「去配置」。
 - 后台监视的失败也带类型（`watch.lastErrorCode`）：凭据没了这类原因在页脚显示同一句提示，而不是原始报错。

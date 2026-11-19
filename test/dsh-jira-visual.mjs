@@ -809,6 +809,101 @@ check(
   `rows=${rows(panel).length}`,
 );
 
+/* ---------------- J：改状态 = 就地更新，不全量重拉；并把这次流转的 from/to 捎给 host ----------------
+   一次 `/jira --json all --limit=0` 会把几百条 issue 重新翻页拉一遍，而改一个状态真正变的只有
+   status / statusCategory / 计数。这里钉住：状态徽标点了之后**没有**新的 /jira 命令，界面却已更新，
+   同时 POST 里带上 from / to / 分类（host 用它让后台轮询认出「这是自己改的」，不再弹通知）。 */
+const waitMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+transitionState.current = 'Backlog';
+transitionState.fail = false;
+transitionState.current = 'Backlog';
+activeFixture.current = FIXTURE;
+await pickStatus('全部状态');
+panel = renderPanel();
+
+const rowOf = (key) => rows(panel).find((row) => text(collect(row, (r) => String(r.props.className ?? '') === 'jmw-key')[0]).trim() === key);
+const statusText = (key) => text(statusButtons(rowOf(key))[0]).trim();
+const dotClassOf = (key) => String(collect(rowOf(key), (r) => String(r.props.className ?? '').split(' ')[0] === 'jmw-dot')[0]?.props?.className ?? '');
+const groupHeadText = (needle) => text(groupHeads(panel).find((head) => text(head).includes(needle))).replace(/\s+/g, ' ').trim();
+const flashText = () => text(byClass(panel, 'jmw-flash')[0]).trim();
+
+async function pickTransition(key, label) {
+  transitionCalls.length = 0;
+  statusButtons(rowOf(key))[0].props.onClick({ preventDefault() {}, stopPropagation() {} });
+  // 流转清单是异步拉的：chips 要等那一次 GET 回来、面板重渲染之后才存在。
+  let chips = [];
+  for (let i = 0; i < 80 && chips.length === 0; i += 1) {
+    await waitMs(20);
+    panel = renderPanel();
+    chips = menuChips(panel);
+  }
+  const chip = chips.find((row) => text(row).trim().startsWith(label));
+  if (!chip) throw new Error(`没找到流转 chip：${label} / ${JSON.stringify(chips.map((row) => text(row).trim()))}`);
+  chip.props.onClick({ preventDefault() {}, stopPropagation() {} });
+  // 等 POST 回来、面板把这一行改完（下拉关掉、busy 清掉）。
+  for (let i = 0; i < 80; i += 1) {
+    await waitMs(20);
+    panel = renderPanel();
+    if (transitionCalls.some((call) => call.method === 'POST') && menuChips(panel).length === 0) break;
+  }
+  await waitMs(40);
+  panel = renderPanel();
+}
+
+const sprint30Before = groupHeadText('Sprint 30');
+const commandsBefore = calls.length;
+await pickTransition('APP-H2', '已完成');
+const postBody = transitionCalls.find((call) => call.method === 'POST')?.body;
+check(calls.length === commandsBefore, 'J 改状态后不再全量重拉列表（没有新的 /jira 命令）', `${commandsBefore} → ${calls.length} 条命令`);
+check(
+  postBody?.from === 'Backlog' && postBody?.to === '已完成' && postBody?.category === 'done',
+  'J POST 捎带 from / to / 分类（host 靠这对值认出「自己改的」，轮询不再通知）',
+  JSON.stringify(postBody),
+);
+check(statusText('APP-H2').startsWith('已完成'), 'J 行内状态徽标就地变成新状态', statusText('APP-H2'));
+check(dotClassOf('APP-H2') === 'jmw-dot done', 'J 行首圆点按新分类上色（done 绿）', dotClassOf('APP-H2'));
+check(
+  sprint30Before.includes('未完成 3 / 共 3') && groupHeadText('Sprint 30').includes('未完成 2 / 共 3'),
+  'J 组头的未完成数就地重算（3/3 → 2/3）',
+  `${sprint30Before} → ${groupHeadText('Sprint 30')}`,
+);
+check(/APP-H2\s*已改为\s*已完成/.test(flashText()) || flashText().includes('APP-H2'), 'J 顶部一次性提示仍然给', flashText());
+
+/* 新状态并入筛选菜单：fixture 的 statusOptions 里没有「正在进行」，本地更新要把它补进去并保持排序。 */
+await pickTransition('APP-H1', '正在进行');
+filterBtn().props.onClick();
+panel = renderPanel();
+const optionTexts = menuChips(panel).map((chip) => text(chip).replace('✓', '').trim());
+check(
+  JSON.stringify(optionTexts) === JSON.stringify(['全部状态', 'Backlog', 'IN QA', '正在进行', '已完成']),
+  'J 新状态并入状态筛选菜单，并按「分类 → 名字」排序',
+  JSON.stringify(optionTexts),
+);
+filterBtn().props.onClick();
+panel = renderPanel();
+
+/* 状态筛选开着时改到别的状态：跟重新查询一样，这条要从列表消失，总数也要减。 */
+await pickStatus('Backlog');
+panel = renderPanel();
+const filteredBefore = rows(panel).length;
+const subtitleBefore = subtitleText();
+const totalBefore = Number((subtitleBefore.match(/共\s*(\d+)\s*项/) ?? [])[1]);
+const filterCommandsBefore = calls.length;
+await pickTransition('APP-H1', '已完成');
+check(
+  rows(panel).length === filteredBefore - 1 && calls.length === filterCommandsBefore,
+  'J 状态筛选开着时改到别的状态：该行就地消失（不重拉列表）',
+  `${filteredBefore} → ${rows(panel).length} 行 / 命令 ${filterCommandsBefore} → ${calls.length}`,
+);
+check(
+  Number.isFinite(totalBefore) && subtitleText() === `共 ${totalBefore - 1} 项 · 状态 Backlog`,
+  'J 副标题的准确总数跟着减 1',
+  `${JSON.stringify(subtitleBefore)} → ${JSON.stringify(subtitleText())}`,
+);
+activeFixture.current = FIXTURE;
+await pickStatus('全部状态');
+panel = renderPanel();
+
 /* ---------------- F：兜底（基座模块表里没有 @tanstack/react-virtual） ----------------
    client 在 factory 里 try/catch 地 require 它；这里再开一个模块实例、这次的 require 口故意不给它，
    验证：不崩、退回「直接渲染全部行」、并 console.warn 一次。 */
@@ -845,6 +940,6 @@ console.log('\nF 兜底（拿不到 @tanstack/react-virtual）：warn 次数 =',
   '| 占位高 =', collect(fbTree, (row) => String(row.props?.className ?? '') === 'jmw-vlist')[0]?.props?.style?.height);
 
 for (const off of effects) { try { off?.(); } catch { /* ignore */ } }
-console.log(failed === 0 ? '\n=== visual G/H/I 段（条目身份 / 估算 / 优先级名次 / 失败提示）：全部通过 ===' : `\n=== visual G/H/I 段（条目身份 / 估算 / 优先级名次 / 失败提示）：${failed} 项失败 ===`);
+console.log(failed === 0 ? '\n=== visual G/H/I/J 段（条目身份 / 估算 / 优先级名次 / 失败提示 / 改状态就地更新）：全部通过 ===' : `\n=== visual G/H/I/J 段（条目身份 / 估算 / 优先级名次 / 失败提示 / 改状态就地更新）：${failed} 项失败 ===`);
 console.log('done');
 process.exit(failed === 0 ? 0 : 1);
