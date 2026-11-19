@@ -315,6 +315,25 @@ const BIG_FIXTURE = {
   sprints: [bigGroup(S30, 30), bigGroup(S29, 29), bigGroup(null, null)],
 };
 
+/* 搜索 fixture：两条结果分属一个迭代 + 无迭代，用来验「搜索结果也按迭代分组」。 */
+const S28 = { id: 28, name: 'APP Sprint 28', state: 'future', start: '2026-12-15', end: '2026-12-28' };
+const SEARCH_ITEMS = [
+  mkItem('APP-S1', 'High', S28, 'Backlog', 'new'),
+  mkItem('APP-S2', 'Low', null, 'IN QA', 'indeterminate'),
+];
+const SEARCH_FIXTURE = {
+  ...FIXTURE,
+  query: { scope: 'search', jql: 'text ~ "網上APP" ORDER BY updated DESC', search: '網上APP' },
+  items: SEARCH_ITEMS,
+  sprints: [
+    { id: 28, name: S28.name, state: S28.state, start: S28.start, end: S28.end, active: false, keys: ['APP-S1'], counts: { new: 1, indeterminate: 0, done: 0, total: 1 } },
+    { id: null, name: '无迭代', state: '', start: '', end: '', active: false, keys: ['APP-S2'], counts: { new: 0, indeterminate: 1, done: 0, total: 1 } },
+  ],
+  total: 2,
+  projectTotals: { APP: 2 },
+  counts: { new: 1, indeterminate: 1, done: 0, total: 2 },
+};
+
 /* --------------------------------------------------------- host 半边 */
 
 const store = new Map();
@@ -384,7 +403,14 @@ const statusOf = (line) => {
   const hit = /--status=(.*?)(?=\s--\w|$)/.exec(String(line));
   return hit ? hit[1].trim() : '';
 };
+const searchOf = (line) => {
+  const hit = /--search=(.*)$/.exec(String(line));
+  return hit ? hit[1].trim() : '';
+};
 const payloadFor = (line) => {
+  // 搜索是另一批结果（host 侧由 text ~ / key = 决定），面板只负责把它按迭代分组显示出来。
+  const search = searchOf(line);
+  if (search) return SEARCH_FIXTURE;
   const status = statusOf(line);
   const base = activeFixture.current;
   if (!status) return { ...base, status: '' };
@@ -904,6 +930,44 @@ activeFixture.current = FIXTURE;
 await pickStatus('全部状态');
 panel = renderPanel();
 
+/* ---------------- K：搜索（放大镜 → 输入 → 回车搜整站；结果同样按迭代分组） ----------------
+   和 Jira 的搜索框一致：关键词搜整站（不只我的 issue），issue key / 浏览链接直达那一条；
+   结果复用同一套「迭代分组 + 项目 tab + 状态筛选」。这里钉住 client 的接线：
+   展开输入行、受控输入、回车才发查询、`--search=` 放行尾、清除回我的列表、Esc 只收输入行。 */
+const searchBtnOf = () => collect(panel, (row) => row.type === 'button' && String(row.props.className ?? '').includes('jmw-searchbtn'))[0];
+const searchInputOf = () => collect(panel, (row) => row.type === 'input' && String(row.props.className ?? '') === 'jmw-searchinput')[0];
+const searchClearOf = () => collect(panel, (row) => row.type === 'button' && String(row.props.className ?? '') === 'jmw-searchclear')[0];
+const lastCommand = () => calls[calls.length - 1]?.line ?? '';
+const rowKeys = () => rows(panel).map((row) => text(collect(row, (r) => String(r.props.className ?? '') === 'jmw-key')[0]).trim());
+
+check(Boolean(searchBtnOf()), 'K 标题栏有搜索按钮');
+searchBtnOf().props.onClick();
+panel = renderPanel();
+check(Boolean(searchInputOf()), 'K 点开后展开搜索输入行');
+check(searchInputOf().props.value === '', 'K 首次展开输入框为空', JSON.stringify(searchInputOf().props.value));
+searchInputOf().props.onChange({ target: { value: '網上APP' } });
+panel = renderPanel();
+check(searchInputOf().props.value === '網上APP', 'K 输入框受控（草稿不自动发查询）');
+check(calls.length === commandsBefore || !lastCommand().includes('--search='), 'K 只改草稿不发查询', lastCommand());
+searchInputOf().props.onKeyDown({ key: 'Enter' });
+await settle();
+panel = renderPanel();
+check(/--search=網上APP$/.test(lastCommand()), 'K 回车后发 --search=（放行尾，整段词不丢）', lastCommand());
+check(JSON.stringify(rowKeys()) === JSON.stringify(['APP-S1', 'APP-S2']), 'K 搜索结果显示对应任务项', rowKeys().join(','));
+check(groupHeads(panel).some((head) => text(head).includes('APP Sprint 28')), 'K 搜索结果按迭代分组（显示对应迭代）', groupHeads(panel).map((head) => text(head).replace(/\s+/g, ' ').trim()).join(' | '));
+check(subtitleText().includes('搜索：網上APP'), 'K 副标题显示当前搜索词', subtitleText());
+check(Boolean(searchClearOf()), 'K 搜索中显示清除按钮');
+searchClearOf().props.onClick();
+await settle();
+panel = renderPanel();
+check(!lastCommand().includes('--search='), 'K 清除后回到我的工作列表（不再带 --search=）', lastCommand());
+check(rows(panel).length === FIXTURE.items.length, 'K 清除后行数回到我的工作列表', `${rows(panel).length} vs ${FIXTURE.items.length}`);
+// 清除只清词，输入行仍开着；Esc 收输入行，列表（已经回到我的工作）不动。
+check(Boolean(searchInputOf()), 'K 清除后搜索行仍开着', `input=${Boolean(searchInputOf())}`);
+keyHandlers[keyHandlers.length - 1]({ key: 'Escape', preventDefault() {} });
+panel = renderPanel();
+check(!searchInputOf() && rows(panel).length === FIXTURE.items.length, 'K Esc 只收起搜索行，结果不丢', `rows=${rows(panel).length}`);
+
 /* ---------------- F：兜底（基座模块表里没有 @tanstack/react-virtual） ----------------
    client 在 factory 里 try/catch 地 require 它；这里再开一个模块实例、这次的 require 口故意不给它，
    验证：不崩、退回「直接渲染全部行」、并 console.warn 一次。 */
@@ -940,6 +1004,6 @@ console.log('\nF 兜底（拿不到 @tanstack/react-virtual）：warn 次数 =',
   '| 占位高 =', collect(fbTree, (row) => String(row.props?.className ?? '') === 'jmw-vlist')[0]?.props?.style?.height);
 
 for (const off of effects) { try { off?.(); } catch { /* ignore */ } }
-console.log(failed === 0 ? '\n=== visual G/H/I/J 段（条目身份 / 估算 / 优先级名次 / 失败提示 / 改状态就地更新）：全部通过 ===' : `\n=== visual G/H/I/J 段（条目身份 / 估算 / 优先级名次 / 失败提示 / 改状态就地更新）：${failed} 项失败 ===`);
+console.log(failed === 0 ? '\n=== visual G/H/I/J/K 段（条目身份 / 估算 / 优先级名次 / 失败提示 / 改状态就地更新 / 搜索）：全部通过 ===' : `\n=== visual G/H/I/J/K 段（条目身份 / 估算 / 优先级名次 / 失败提示 / 改状态就地更新 / 搜索）：${failed} 项失败 ===`);
 console.log('done');
 process.exit(failed === 0 ? 0 : 1);

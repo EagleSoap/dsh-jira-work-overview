@@ -6,6 +6,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+
+- **面板搜索，行为对齐 Jira 自己的搜索框。** 标题右侧新增放大镜：展开输入行，回车搜 **整站**（不只指派给我的）——
+  关键词走 Jira 的 `text ~ "…"`（摘要 / 描述 / 评论），输入 issue key 或粘贴 `/browse/APP-123` 链接则直接
+  `key = "…"` 定位。命中结果沿用面板原有的 sprint 分组 / 项目 tab / 状态筛选 / 准确总数，所以每一行都能看到
+  它属于哪个迭代；`×` 清空回到「我的工作」，Esc 只收输入行、结果保留。命令面同时支持
+  `/jira --search=<文本>`（搜索词可带空格，按 token 一直吃到下一个 `--` 开关）。
+- `test/dsh-jira-search.mjs`（离线，21 项断言：全文 / key / browse URL、JQL 转义、`--status` 组合、
+  `approximate-count` 的 `AND project = …`、空搜索回落）与 `test/dsh-jira-visual.mjs` 新增 K 段
+  （放大镜 → 输入 → 回车 → 按迭代分组 → 清除 / Esc）。
+
 ## [0.15.1] - 2026-11-19
 
 ### Fixed

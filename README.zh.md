@@ -46,6 +46,7 @@ plugin_manager install_bundle(target="/absolute/path/to/dsh-jira-work-overview")
 /jira --json [以上任一种]   同一份数据换成 JSON（左侧栏面板用的就是这个）
 /jira --limit=0        这次查询取多少条（0 = 不限制，一直翻页到没有下一页为止；正数 10–5000；安全上限 5000 条 / 50 页 / 30s）
 /jira --status=IN QA   只看这一个工作流状态（空间允许，状态名要带引号时把引号去掉）
+/jira --search=登录报错  整站全文搜索（摘要 / 描述 / 评论），也可以直接给 issue key
 /jira --lang=en        这次输出用哪种语言（zh / en，不改配置）
 ```
 
@@ -69,6 +70,12 @@ all    : assignee = currentUser() ORDER BY updated DESC
 
 浮层里第一行是**项目 tab** + 右侧的**状态筛选**与「展开全部 / 折叠全部」，
 标题下面是「共 N 项」，右上角可刷新，点背板或按 Esc 关闭。
+
+**搜索（和 Jira 搜索框一致）**：点标题右侧的放大镜展开输入行，输入关键词或 issue key 后**回车**。
+关键词走 Jira 自己的 `text ~` 全文搜索，范围是**整站**（不只指派给我的，摘要 / 描述 / 评论都会命中）；
+输入 issue key 或粘贴 `/browse/APP-123` 链接则直接定位那一条。搜索命中同样按迭代分组，
+项目 tab / 状态筛选 / 准确总数都照常可用，所以一眼能看出命中项属于哪个迭代；
+`×` 清空并回到「我的工作」，**Esc** 只收起输入行（结果还在）。
 
 <img src="docs/images/panel-watch.zh.png" width="1040" alt="实时变更横幅与展开的状态流转下拉（待办 / 进行中 / IN QA / 已完成）">
 

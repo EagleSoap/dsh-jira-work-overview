@@ -77,6 +77,7 @@ const SCOPE_KEYS = {
   sprint: 'scope.sprint',
   all: 'scope.all',
   jql: 'scope.jql',
+  search: 'scope.search',
 };
 
 function scopeLabel(scope) {
@@ -130,6 +131,37 @@ function applyStatus(jql, status) {
 
 const ISSUE_KEY = /^[A-Z][A-Z0-9_]*-\d+$/;
 const COMMAND_NAME = 'jira';
+
+/**
+ * 面板搜索框：行为和 Jira 自己的搜索框一致 —— **全文搜索整站（不只指派给我的）**。
+ *
+ * - 普通关键词 → `text ~ "…"`：Jira 的 text 字段覆盖摘要 / 描述 / 评论 / 环境，和 Jira 搜索框同一套。
+ * - 输入 issue key（或粘贴 /browse/APP-123 链接）→ 直接按键取那一条，和 Jira 搜索框「跳转到 issue」一致。
+ * - 关键词里的引号 / 反斜杠转义成 JQL 字符串字面量，控制字符与超长输入先清掉，避免把 JQL 弄坏。
+ * 搜索不带 `assignee = currentUser()`：Jira 搜索本来就是整站范围，结果再按 sprint 分组给面板。
+ */
+const SEARCH_TEXT_MAX = 300;
+const SEARCH_BROWSE_KEY = /\/browse\/([A-Za-z][A-Za-z0-9_]*-\d+)/;
+
+function normalizeSearchQuery(raw) {
+  const text = typeof raw === 'string' ? raw.replace(/[\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim() : '';
+  return text.slice(0, SEARCH_TEXT_MAX);
+}
+
+function escapeJqlString(value) {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+/** 搜索词 → JQL；空串返回空串（调用方据此退回原来的范围查询）。 */
+function buildSearchJql(raw) {
+  const text = normalizeSearchQuery(raw);
+  if (!text) return '';
+  const browse = SEARCH_BROWSE_KEY.exec(text);
+  const upper = text.toUpperCase();
+  const key = ISSUE_KEY.test(upper) ? upper : (browse ? browse[1].toUpperCase() : '');
+  if (key) return `key = "${key}"`;
+  return `text ~ "${escapeJqlString(text)}" ORDER BY updated DESC`;
+}
 
 /**
  * 可分类的 Jira 失败：`code` 是稳定的机器可读类型（client 的 FAILURES 表按它选提示文案），
@@ -194,6 +226,7 @@ const TEXT = {
     'scope.sprint': '当前迭代里我的 issue',
     'scope.all': '我的全部 issue',
     'scope.jql': '我的匹配 issue',
+    'scope.search': 'Jira 搜索结果',
     'common.unknown': '未知',
     'common.untitled': '(无标题)',
     'sep.list': '、',
@@ -268,7 +301,7 @@ const TEXT = {
     'verify.skipped': '没有邮箱或令牌可验证',
     // 命令
     'command.description': '列出我的 Jira 迭代内容与完成状态（命令面直接渲染，不产生模型消息）',
-    'command.hint': '[--json] [--limit=<n>|0] [--lang=<tag>] [open|sprint|all | <issue key> | <JQL>]',
+    'command.hint': '[--json] [--limit=<n>|0] [--lang=<tag>] [--search=<text>] [open|sprint|all | <issue key> | <JQL>]',
     'command.failed': 'Jira 读取失败：{message}',
     // 工具描述与参数（注册时取值，DSH 不会随语言切换实时更新）
     'tool.myWork.description': '读取指派给我的 Jira issue 及其当前工作流状态（跨项目，按 issue key 前缀区分）。默认只列未完成项，用来了解我在迭代里还要做什么、哪些已完成但还在等测试；scope 可切换到当前活跃迭代或全部 issue。',
@@ -362,6 +395,7 @@ const TEXT = {
     'scope.sprint': 'My issues in the active sprint',
     'scope.all': 'All my issues',
     'scope.jql': 'My matching issues',
+    'scope.search': 'Jira search results',
     'common.unknown': 'Unknown',
     'common.untitled': '(no summary)',
     'sep.list': ', ',
@@ -431,7 +465,7 @@ const TEXT = {
     'err.chooseUnsupported': 'This platform has no system app chooser; open the file manually.',
     'verify.skipped': 'nothing to verify without an email and a token',
     'command.description': 'List my Jira sprint contents and completion status (rendered in the command surface, no model message)',
-    'command.hint': '[--json] [--limit=<n>|0] [--lang=<tag>] [open|sprint|all | <issue key> | <JQL>]',
+    'command.hint': '[--json] [--limit=<n>|0] [--lang=<tag>] [--search=<text>] [open|sprint|all | <issue key> | <JQL>]',
     'command.failed': 'Jira read failed: {message}',
     'tool.myWork.description': 'Read the Jira issues assigned to me together with their current workflow status (across projects, distinguished by issue key prefix). By default only open items are listed, to answer what is left in the sprint and what is done but still awaiting test; scope can switch to the active sprint or all issues.',
     'tool.myWork.scope': 'open=open items (default); sprint=my issues in the active sprint; all=all my issues',
@@ -737,10 +771,12 @@ async function runCommand(jira, raw, signal) {
   const limit = limitToken ? normalizeLimit(limitToken.slice('--limit='.length), limitOf(jira.settings)) : limitOf(jira.settings);
   // 逐 token 收集剩余参数（= scope 词或自定义 JQL），同时摘掉三个开关：
   //   --limit=… / --lang=… 只影响这一次输出；
-  //   `--status=<状态名>` = 只看一个工作流状态（面板筛选菜单发的就是它），非法值忽略（见 sanitizeStatus）。
-  // 状态名可能带空格（例如 `IN QA`），会被 split 切开，所以从 `--status=` 起一路吃到下一个 `--` 开关为止。
+  //   `--status=<状态名>` = 只看一个工作流状态（面板筛选菜单发的就是它），非法值忽略（见 sanitizeStatus）；
+  //   `--search=<文本>` = Jira 全文搜索（面板搜索框发的就是它）。搜索词可能带空格，所以从
+  //   `--search=` 起一路吃到下一个 `--` 开关为止；面板把它放在行尾，于是整段都是搜索词。
   const restTokens = [];
   let status = '';
+  let search = '';
   for (let i = 0; i < tokens.length; i += 1) {
     const token = tokens[i];
     if (token === '--json' || token.startsWith('--limit=') || token.startsWith('--lang=')) continue;
@@ -753,26 +789,39 @@ async function runCommand(jira, raw, signal) {
       status = sanitizeStatus(parts.join(' '));
       continue;
     }
+    if (token.startsWith('--search=')) {
+      const parts = [token.slice('--search='.length)];
+      while (i + 1 < tokens.length && !tokens[i + 1].startsWith('--')) {
+        i += 1;
+        parts.push(tokens[i]);
+      }
+      search = normalizeSearchQuery(parts.join(' '));
+      continue;
+    }
     restTokens.push(token);
   }
   const rest = restTokens.join(' ').trim();
-  const { jql, scope } = resolveQuery(
-    Object.prototype.hasOwnProperty.call(SCOPE_JQL, rest) ? rest : '',
-    rest && !SCOPE_JQL[rest] ? rest : '',
-  );
+  // 搜索覆盖 scope：Jira 搜索是整站的，不再套 `assignee = currentUser()`。
+  const searchJql = buildSearchJql(search);
+  const { jql, scope } = searchJql
+    ? { jql: searchJql, scope: 'search' }
+    : resolveQuery(
+      Object.prototype.hasOwnProperty.call(SCOPE_JQL, rest) ? rest : '',
+      rest && !SCOPE_JQL[rest] ? rest : '',
+    );
 
   try {
-    return await runQuery(jira, { json, limit, rest, status, jql, scope, signal });
+    return await runQuery(jira, { json, limit, rest, status, jql, scope, search, signal });
   } catch (error) {
     // 面板走 --json：失败也做成结构化载荷（ok:false + error.code），界面才能按类型给提示，
     // 而不是把一整句报错糊在列表位置。命令行文本输出保持原样抛出（那条命令面本来就该看到错误）。
     if (!json) throw error;
-    return JSON.stringify(buildWorkListErrorJson(jira, error, { jql, scope, status, limit }), null, 2);
+    return JSON.stringify(buildWorkListErrorJson(jira, error, { jql, scope, status, limit, search }), null, 2);
   }
 }
 
 /** 查询主体：单条 issue 或工作列表；文本 / JSON 两种输出只在这里分叉。 */
-async function runQuery(jira, { json, limit, rest, status, jql, scope, signal }) {
+async function runQuery(jira, { json, limit, rest, status, jql, scope, search, signal }) {
   if (rest && ISSUE_KEY.test(rest.toUpperCase())) {
     const key = rest.toUpperCase();
     const fields = [...LIST_FIELDS, await resolveSprintField(jira, signal), 'description', 'created', 'components', 'comment'];
@@ -793,7 +842,7 @@ async function runQuery(jira, { json, limit, rest, status, jql, scope, signal })
   // 文本输出刻意不再标注「活跃迭代」（用户 2026-11-18：这个 board 的 sprint 状态跟实际工作安排对不上，
   // 标出来会误导）；结构化输出里仍然保留这个字段，供界面或脚本自行取用。
   return json
-    ? JSON.stringify(buildWorkListJson(page.issues, filteredJql, scope, jira, await fetchActiveSprint(jira, signal), { limit, hasMore: page.hasMore, status, ranks }, totals), null, 2)
+    ? JSON.stringify(buildWorkListJson(page.issues, filteredJql, scope, jira, await fetchActiveSprint(jira, signal), { limit, hasMore: page.hasMore, status, ranks, search }, totals), null, 2)
     : renderWorkList(page.issues, filteredJql, scope, jira, page.hasMore ? page.limit : 0);
 }
 
@@ -2971,7 +3020,8 @@ function buildWorkListJson(issues, jql, scope, jira, sprint, page, totals) {
     ok: true,
     source: 'dsh-jira-work-overview',
     generatedAt: new Date().toISOString(),
-    query: { scope, jql },
+    // search 只有搜索请求才有值；界面据此显示「搜索：…」并在点清除时退回我的工作列表。
+    query: { scope, jql, search: typeof page?.search === 'string' ? page.search : '' },
     // project 保留兼容（配置里的默认项目）；projects 是这次结果里真正出现的项目。
     project: jira.settings.projectKey,
     projects: [...items.reduce((map, item) => {
@@ -3003,13 +3053,13 @@ function buildWorkListJson(issues, jql, scope, jira, sprint, page, totals) {
  * `--json` 失败时的载荷：字段与正常载荷同一套（列表为空），另外带 `ok:false` 与 `error{code,message}`。
  * 界面只读 `ok` / `error.code` 选提示文案，脚本也能按 code 分支 —— 两边都不必去匹配报错文案。
  */
-function buildWorkListErrorJson(jira, error, { jql, scope, status, limit }) {
+function buildWorkListErrorJson(jira, error, { jql, scope, status, limit, search }) {
   return {
     ok: false,
     source: 'dsh-jira-work-overview',
     generatedAt: new Date().toISOString(),
     error: { code: errorCodeOf(error), message: String(error?.message ?? error) },
-    query: { scope, jql },
+    query: { scope, jql, search: typeof search === 'string' ? search : '' },
     project: jira.settings.projectKey,
     projects: [],
     limit,

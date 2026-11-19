@@ -1,7 +1,7 @@
 # AGENTS.md — working on `dsh-jira-work-overview`
 
 A DeepSeek Harness (DSH) plugin that shows the Jira work items assigned to you: a left-sidebar panel
-(project tabs, status filter, sprint grouping, virtualization, accurate totals), three agent tools, a
+(project tabs, status filter, site-wide Jira search, sprint grouping, virtualization, accurate totals), three agent tools, a
 `/jira` slash command, live change badge + desktop notifications, workflow-state transitions, and
 in-panel token / email / watch / fetch-size configuration.
 

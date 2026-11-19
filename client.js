@@ -123,6 +123,13 @@ window.__ModuleLoader__.load({
         filterTitle: '筛选',
         filterAll: '全部状态',
         filterStatusPrefix: '· 状态 {name}',
+        // 搜索（标题右侧的放大镜 → 输入行）：和 Jira 搜索框一致，搜整站，不只我的 issue。
+        searchOpen: '搜索 Jira',
+        searchPlaceholder: '搜索 Jira：摘要 / 描述 / 评论，或 issue key',
+        searchHint: '回车搜索整站（不只指派给我的）；Esc 收起',
+        searchClear: '清除搜索',
+        searchResultPrefix: '搜索：{query}',
+        searchEmpty: '没有找到匹配的 issue',
         projectTabs: '项目',
         scrollLeft: '向左滚动',
         scrollRight: '向右滚动',
@@ -287,6 +294,13 @@ window.__ModuleLoader__.load({
         filterTitle: 'Filter',
         filterAll: 'All statuses',
         filterStatusPrefix: '· status {name}',
+        // Search (the magnifier in the header → input row): same as Jira's search box, site-wide.
+        searchOpen: 'Search Jira',
+        searchPlaceholder: 'Search Jira: summary, description, comments, or an issue key',
+        searchHint: 'Enter searches all of Jira (not just my issues); Esc closes',
+        searchClear: 'Clear search',
+        searchResultPrefix: 'Search: {query}',
+        searchEmpty: 'No matching issues found',
         projectTabs: 'Projects',
         scrollLeft: 'Scroll left',
         scrollRight: 'Scroll right',
@@ -511,6 +525,11 @@ window.__ModuleLoader__.load({
       // 状态筛选（单选，空串 = 全部状态）与筛选菜单开关。
       status: '',
       filterOpen: false,
+      // 搜索：输入行是否展开、输入框里还没提交的草稿、已提交并正在显示的搜索词。
+      // 三者分开：改了草稿但没回车时列表不动，清除时草稿与生效词一起回到空。
+      searchOpen: false,
+      searchDraft: '',
+      searchText: '',
       // 改状态：哪一行的下拉开着、该行读到的可用流转、正在写入的 key、一次性提示文案。
       menuKey: '',
       statuses: {},
@@ -932,8 +951,10 @@ window.__ModuleLoader__.load({
       try {
         // host 的 i18n 已落地：命令面也把界面语言捎过去，否则 host 渲染的文案会跟面板不一致。
         // 面板固定发 scope（all，含已完成/已关闭）；`--status=` 是单选状态筛选，空串表示不筛。
+        // `--search=` 放在行尾：搜索词可能带空格，host 会一路吃到下一个 `--` 开关为止。
         const status = typeof snapshot.status === 'string' ? snapshot.status : '';
-        const line = `/jira --json ${next} --limit=0${status ? ` --status=${status}` : ''} --lang=${currentLanguage()}`;
+        const search = typeof snapshot.searchText === 'string' ? snapshot.searchText.trim() : '';
+        const line = `/jira --json ${next} --limit=0${status ? ` --status=${status}` : ''} --lang=${currentLanguage()}${search ? ` --search=${search}` : ''}`;
         const result = await commands.execute(sessionId, line, [], controller?.signal);
         if (seq !== loadSeq) return;
         if (!result || result.ok !== true) {
@@ -1064,6 +1085,19 @@ window.__ModuleLoader__.load({
   color:var(--dsw-alias-label-secondary,#5c6270);background:transparent;border:0;border-radius:var(--dsw-radius-sm,8px);cursor:pointer}
 .jmw-iconbtn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06));color:var(--dsw-alias-label-primary,#1b1d22)}
 .jmw-iconbtn:disabled{opacity:.4;cursor:default}
+/* 搜索：放大镜按钮（生效中 / 展开时上色）+ 标题下的输入行。输入框只有按回车才发查询。 */
+.jmw-searchbtn.on{color:#4d6bfe;background:rgba(77,107,254,.12)}
+.jmw-searchbtn.set{color:#4d6bfe}
+.jmw-search{display:flex;align-items:center;gap:8px;padding:0 18px 10px}
+.jmw-searchicon{flex:none;color:var(--dsw-alias-label-tertiary,#8a8f99)}
+.jmw-searchinput{flex:1;min-width:0;height:30px;padding:0 10px;font:inherit;font-size:12.5px;
+  color:var(--dsw-alias-label-primary,#1b1d22);background:var(--dsw-alias-bg-l1,#fff);
+  border:1px solid var(--dsw-alias-border-l2,rgba(38,49,72,.18));border-radius:var(--dsw-radius-sm,8px);outline:none}
+.jmw-searchinput:focus{border-color:#4d6bfe;box-shadow:0 0 0 2px rgba(77,107,254,.16)}
+.jmw-searchinput::placeholder{color:var(--dsw-alias-label-tertiary,#8a8f99)}
+.jmw-searchclear{flex:none;width:24px;height:24px;padding:0;font:inherit;font-size:15px;line-height:1;cursor:pointer;
+  border:0;border-radius:999px;color:var(--dsw-alias-label-tertiary,#8a8f99);background:transparent}
+.jmw-searchclear:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06));color:var(--dsw-alias-label-primary,#1b1d22)}
 /* 状态筛选按钮（tab 行右侧）。
    范围分段控件（.jmw-seg）和它旁边的总数（.jmw-total）连同 .jmw-bar 整行已删（用户 2026-11-18）。 */
 .jmw-filterbtn{flex:none;display:inline-flex;align-items:center;gap:4px;padding:3px 9px;font:inherit;font-size:11.5px;
@@ -1355,6 +1389,25 @@ window.__ModuleLoader__.load({
         }));
     }
 
+    function SearchGlyph(props) {
+      return h('svg', {
+        viewBox: '0 0 16 16',
+        width: 15,
+        height: 15,
+        className: props?.className,
+        'aria-hidden': true,
+        focusable: false,
+      }, [
+        h('circle', {
+          key: 'ring', cx: 7, cy: 7, r: 4.2, fill: 'none', stroke: 'currentColor', strokeWidth: 1.4,
+        }),
+        h('path', {
+          key: 'handle', d: 'M10.2 10.2 13.5 13.5', fill: 'none', stroke: 'currentColor', strokeWidth: 1.4,
+          strokeLinecap: 'round',
+        }),
+      ]);
+    }
+
     function CloseGlyph() {
       return h('svg', { viewBox: '0 0 16 16', width: 15, height: 15, 'aria-hidden': true, focusable: false },
         h('path', {
@@ -1599,6 +1652,7 @@ window.__ModuleLoader__.load({
       const cardRef = React.useRef(null);
       const credRef = React.useRef(null);
       const stripRef = React.useRef(null);
+      const searchRef = React.useRef(null);
       // 真正的滚动容器（.jmw-body）：虚拟列表必须挂在它上面。
       const bodyRef = React.useRef(null);
       // 令牌用独立弹窗展示（标题右侧的「配置」按钮开关）。
@@ -1607,7 +1661,40 @@ window.__ModuleLoader__.load({
       const credOpen = state.credOpen === true;
       const setCredOpen = (value) => patch({ credOpen: typeof value === 'function' ? value(credOpen) : value });
       // 关面板 = 连所有浮层一起关：否则下次点开入口会「列表 + 配置」两个弹窗叠着出现。
+      // 搜索行不算浮层（它是列表的一部分，和项目 tab / 状态筛选一样跨开关保留），所以不在这里收。
       const closeAll = () => patch({ open: false, credOpen: false, menuKey: '', filterOpen: false });
+
+      // 搜索：标题右侧的放大镜展开输入行。草稿（searchDraft）与已生效的搜索词（searchText）
+      // 分开，回车才切词；搜索结果和「我的工作」共用同一套 sprint 分组 / 项目 tab / 状态筛选。
+      const searchOpen = state.searchOpen === true;
+      const searchText = typeof state.searchText === 'string' ? state.searchText : '';
+      const searchDraft = typeof state.searchDraft === 'string' ? state.searchDraft : '';
+      const openSearch = () => patch({
+        searchOpen: true,
+        // 展开时把已经生效的词放回输入框，方便改写或看清搜的是什么。
+        searchDraft: searchText,
+        filterOpen: false,
+        menuKey: '',
+      });
+      const submitSearch = () => {
+        const next = searchDraft.trim();
+        // 搜索是整站范围：先把项目 tab 归到「全部」，否则旧 tab 可能把所有结果都过滤掉。
+        patch({ searchText: next, project: next ? 'ALL' : snapshot.project, menuKey: '', filterOpen: false });
+        // patch 直接改共享 snapshot，load 里现读 searchText，所以这里不用等重渲染。
+        load(snapshot.scope);
+      };
+      const clearSearch = () => {
+        patch({ searchText: '', searchDraft: '' });
+        load(snapshot.scope);
+      };
+
+      // 展开搜索行时把焦点放进输入框（并选中旧词，直接输入即可替换）。
+      React.useEffect(() => {
+        if (!searchOpen) return;
+        const input = searchRef.current;
+        input?.focus?.();
+        input?.select?.();
+      }, [searchOpen]);
 
       React.useEffect(() => {
         if (!state.open || typeof document === 'undefined') return undefined;
@@ -1615,7 +1702,8 @@ window.__ModuleLoader__.load({
           if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing
             || event.keyCode === 229 || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey || event.repeat) return;
           event.preventDefault?.();
-          // Esc 的顺序：令牌弹窗 → 状态下拉 → 筛选菜单 → 面板。
+          // Esc 的顺序：令牌弹窗 → 状态下拉 → 筛选菜单 → 搜索行 → 面板。
+          // 搜索行收起时保留已生效的搜索词（结果还在列表里），点放大镜能再展开看/改。
           if (credOpen) {
             setCredOpen(false);
             return;
@@ -1628,11 +1716,15 @@ window.__ModuleLoader__.load({
             patch({ filterOpen: false });
             return;
           }
+          if (snapshot.searchOpen) {
+            patch({ searchOpen: false });
+            return;
+          }
           closeAll();
         };
         document.addEventListener('keydown', onKeyDown, true);
         return () => document.removeEventListener('keydown', onKeyDown, true);
-      }, [state.open, state.credOpen, state.menuKey, state.filterOpen]);
+      }, [state.open, state.credOpen, state.menuKey, state.filterOpen, state.searchOpen]);
 
       // 下面这些纯计算放在早退之前：Panel 的 hook 调用顺序每次都要一样
       //（虚拟列表的 useVirtualizer 与滚动重置 effect 都在这一层调用）。
@@ -1686,9 +1778,9 @@ window.__ModuleLoader__.load({
       const virtualRows = rowVirtualizer.getVirtualItems();
       const virtualSize = rowVirtualizer.getTotalSize();
 
-      // 换项目 tab / 换状态筛选 / 刷新出新数据：滚动位置回到顶部（比较自然）。
+      // 换项目 tab / 换状态筛选 / 换搜索词 / 刷新出新数据：滚动位置回到顶部（比较自然）。
       // 折叠只是重算条目，不动滚动位置，所以不放进 deps。
-      const scrollResetKey = `${project}|${statusFilter}|${state.data?.generatedAt ?? ''}`;
+      const scrollResetKey = `${project}|${statusFilter}|${searchText}|${state.data?.generatedAt ?? ''}`;
       React.useEffect(() => {
         const element = bodyRef.current;
         if (!element) return; // 迷你 React / 还没挂载：没有可滚动元素
@@ -1698,9 +1790,10 @@ window.__ModuleLoader__.load({
 
       if (!state.open) return null;
 
-      // 标题下的副标题 = 筛选后的准确总数（拿不到就不显示数字）+ 当前状态筛选。
+      // 标题下的副标题 = 当前搜索词（如果有）+ 筛选后的准确总数（拿不到就不显示数字）+ 当前状态筛选。
       // zh 的 filterStatusPrefix 自带前导「· 」，总数拿不到时把开头的「· 」抹掉，不留一个怪符号。
       const subtitle = [
+        searchText ? t('searchResultPrefix', { query: searchText }) : '',
         typeof totalValue === 'number' && Number.isFinite(totalValue) ? t('scopeTotal', { count: totalValue }) : '',
         statusFilter ? t('filterStatusPrefix', { name: statusFilter }) : '',
       ].filter(Boolean).join(' ').replace(/^·\s*/, '');
@@ -1813,7 +1906,7 @@ window.__ModuleLoader__.load({
           ]);
         }
         if (entry.kind === 'item') return renderRow(entry.item);
-        return h('div', { className: 'jmw-state' }, state.loading ? t('loading') : t('empty'));
+        return h('div', { className: 'jmw-state' }, state.loading ? t('loading') : (searchText ? t('searchEmpty') : t('empty')));
       }
 
       // 「加载更多」：只在 host 真的截断时出现（面板固定要 --limit=0，所以这只可能是撞到了
@@ -1848,6 +1941,15 @@ window.__ModuleLoader__.load({
             subtitle ? h('div', { key: 'sub', className: 'jmw-sub' }, subtitle) : null,
           ]),
           h('button', {
+            key: 'search',
+            type: 'button',
+            className: `jmw-iconbtn jmw-searchbtn${searchOpen ? ' on' : ''}${searchText ? ' set' : ''}`,
+            title: searchText ? t('searchResultPrefix', { query: searchText }) : t('searchOpen'),
+            'aria-label': t('searchOpen'),
+            'aria-expanded': searchOpen ? 'true' : 'false',
+            onClick: () => (searchOpen ? patch({ searchOpen: false }) : openSearch()),
+          }, h(SearchGlyph)),
+          h('button', {
             key: 'cred',
             type: 'button',
             className: `jmw-btn ghost${credOpen ? ' on' : ''}`,
@@ -1875,6 +1977,40 @@ window.__ModuleLoader__.load({
             onClick: () => closeAll(),
           }, h(CloseGlyph)),
         ]),
+        // 搜索行（放大镜展开）：输入 → 回车搜整站（Jira 的 text 全文搜索 / issue key 直达），
+        // 空值回车退回「我的工作」。输入框用受控值，草稿改完不自动查询，避免每敲一个字打一次 Jira。
+        searchOpen
+          ? h('div', { key: 'search', className: 'jmw-search' }, [
+            h(SearchGlyph, { key: 'icon', className: 'jmw-searchicon' }),
+            h('input', {
+              key: 'input',
+              ref: searchRef,
+              type: 'search',
+              className: 'jmw-searchinput',
+              value: searchDraft,
+              placeholder: t('searchPlaceholder'),
+              title: t('searchHint'),
+              'aria-label': t('searchOpen'),
+              onChange: (event) => patch({ searchDraft: event?.target?.value ?? '' }),
+              onKeyDown: (event) => {
+                if (event?.key === 'Enter' && !event.isComposing) {
+                  event.preventDefault?.();
+                  submitSearch();
+                }
+              },
+            }),
+            searchText
+              ? h('button', {
+                key: 'clear',
+                type: 'button',
+                className: 'jmw-searchclear',
+                title: t('searchClear'),
+                'aria-label': t('searchClear'),
+                onClick: clearSearch,
+              }, '×')
+              : null,
+          ])
+          : null,
         // tab 行：项目 tab（左滚 / 条 / 右滚）+ 状态筛选 + 展开全部 / 折叠全部。
         // 范围分段控件（未完成 / 全部）与它右侧的总数已删（用户 2026-11-18）：范围固定为 all，
         // 总数移到标题下的副标题，「展开 / 折叠全部」从原来的第二行挪到这里。

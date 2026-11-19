@@ -14,9 +14,10 @@ Show **your** Jira work items — with their real workflow status — inside [De
 
 - **Rows are highlighted by Jira's own priority order** — the top two levels get a row background and a left bar (reddest = highest), read from `GET /rest/api/3/priority` rather than a hard-coded "Highest", so a site that reorders priorities or uses custom names (`P0`, `Blocker`) still gets it right. Everything below stays uncoloured. If the site does not expose that list, the panel falls back to matching the names `Highest` / `High`.
 - **Left-sidebar panel** — one row per issue, grouped by sprint (collapsible, newest sprint first), with project tabs, a single-select **status filter**, an **accurate total** in the header, priority highlighting (see above), and a status dropdown to move an issue through its workflow **in place** — only that row and the counts are updated, the list is not re-fetched.
+- **Search, Jira-style** — the magnifier in the panel header opens a search row. Enter searches **all of Jira** (summary / description / comments, via Jira's own `text ~` operator), not just your issues; an issue key or a pasted `/browse/APP-123` link jumps straight to that issue. Results reuse the same sprint grouping, project tabs, status filter and accurate total, so a hit shows which sprint it belongs to; `×` clears back to your work.
 - **Live watch** — the host polls "assigned to me and not done" in the background; new assignments / status changes show a **system notification**, an **unread badge** on the sidebar entry, and a "what changed" banner with *mark as read*. The panel refreshes itself when a change arrives.
 - **Three agent tools** — `jira_my_work`, `jira_issue`, `jira_transition` (preview by default, writes only with `apply: true`).
-- **One slash command** — `/jira [--json] [--limit=<n>|0] [--lang=<tag>] [open|sprint|all | <issue key> | <JQL>]`; it renders in the command surface, so it costs no model tokens.
+- **One slash command** — `/jira [--json] [--limit=<n>|0] [--lang=<tag>] [--search=<text>] [open|sprint|all | <issue key> | <JQL>]`; it renders in the command surface, so it costs no model tokens.
 - **Configure dialog** — Jira site / email / API token (token goes to the DSH credential store), fetch size, watch switch + interval, notification switch, UI language, and one-click **open `cordis.patch.yml`** (default app / system "open with" chooser / detected editors / custom app).
 - **Bilingual UI** — follows the DSH language setting (`设置 → 通用 → 语言`), live; Jira-returned text (summaries, status names, labels) is always shown verbatim.
 
@@ -80,6 +81,7 @@ Prefer files? Add an override row to your profile's `cordis.patch.yml` (this is 
 ### Panel
 
 - **Project tabs** (with `‹ ›` scrolling) filter by issue-key prefix; **status filter** is single-select, defaults to "all statuses".
+- **Search**: click the magnifier, type a keyword or an issue key, press **Enter**. The query runs against all of Jira (not only your issues); matching issues are grouped by sprint like your own list, with their project tabs / status filter / total. Clicking `×` clears the search and returns to your work; **Esc** only closes the input row (results stay).
 - The header shows the **accurate total** for the current project + status, straight from Jira's `approximate-count`.
 - Click a **status chip** on any row to move the issue; the list reloads. **Esc** closes the top-most layer (status menu → configure dialog → panel).
 - The list is **virtualized**: thousands of rows scroll smoothly because only the visible ones are in the DOM.
@@ -93,6 +95,7 @@ Prefer files? Add an override row to your profile's `cordis.patch.yml` (this is 
 /jira --json                # same, as JSON (used by the panel)
 /jira --limit=200           # cap this call (0 = unlimited)
 /jira --status="IN QA"      # server-side status filter
+/jira --search="login error" # full-text search across all of Jira (or an issue key)
 /jira APP-4051              # one issue in full
 /jira project = APP AND duedate is not EMPTY
 ```
