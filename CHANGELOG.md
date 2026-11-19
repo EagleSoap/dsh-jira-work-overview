@@ -4,6 +4,22 @@ All notable changes to **dsh-jira-work-overview** are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The first 25 releases were built in a single day, so the dates are real but the cadence was not: each entry lists what changed, not how long it took.
 
+## [Unreleased]
+
+面板的失败状态改成「说人话」：没配令牌时提示怎么配，而不是把一整句 host 报错糊在列表位置。
+
+### Added
+
+- **可分类的失败 + 对应的提示文案。** `--json`（面板专用）失败时 host 不再抛错，改为回一份形状正常的载荷带 `ok:false` 与 `error.code`：`no_credential` / `credential_unreadable` / `no_email` / `no_base_url` / `auth`（HTTP 401/403）/ `network` / `http` / `not_json` / `unknown`。面板按 code 显示标题 + 一句「怎么办」，`去配置` 直达令牌弹窗、`重试` 重新查询；只有 `auth` / `network` / `http` / `not_json` 这类需要看原文的，才把原始 message 以小字附在提示下面。类型是 host 给的稳定 code，不靠匹配报错文案（`CommandResult` 只有 `{kind,text}` 两个槽）。
+- 凭据库读不出来与「压根没配」分成两种（`credential_unreadable` / `no_credential`）：前者说明三条来源都没有值、且凭据服务本身报错，提示是「重新保存一次令牌」而不是「去配置」。
+- 后台监视的失败也带类型（`watch.lastErrorCode`）：凭据没了这类原因在页脚显示同一句提示，而不是原始报错。
+- `test/dsh-jira-visual.mjs` 新增 I 段：无令牌 → 提示 + 「去配置」打开弹窗且原始报错不可见；401 → 标题 + 详情小字；恢复后点「重试」回到正常列表。
+- `test/dsh-jira-json.mjs` 在 `--json` 失败时打印 `SKIP:` 并以 0 退出（以前会 JSON.parse 崩掉）。
+
+### Changed
+
+- 文本模式的 `/jira`（人在命令面里敲）行为没变：失败仍返回 `kind:'error'` 的原始报错 —— 命令面本来就该看到真实原因。
+
 ## [0.14.0] - 2026-11-19
 
 高亮不再写死「`Highest` 就是最高级」，改为挂到 Jira 自己给的优先级名次上。

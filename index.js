@@ -130,6 +130,34 @@ function applyStatus(jql, status) {
 
 const ISSUE_KEY = /^[A-Z][A-Z0-9_]*-\d+$/;
 const COMMAND_NAME = 'jira';
+
+/**
+ * 可分类的 Jira 失败：`code` 是稳定的机器可读类型（client 的 FAILURES 表按它选提示文案），
+ * `message` 仍是给人看的原文。命令结果只有 `{kind, text}` 两个槽（见 dsh-commands 的
+ * CommandResult），所以 `--json` 的失败载荷把 code 放进 error 对象里，而不是靠匹配文案。
+ * 类型只有这几种，新增一种要同时加 client 的 FAILURES 文案：
+ *   no_credential / credential_unreadable / no_email / no_base_url / auth / http / network /
+ *   not_json / unknown
+ */
+class JiraError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.name = 'JiraError';
+    this.code = code;
+  }
+}
+
+/** 没有 code 的异常（JSON.parse、第三方库、被 abort 等）一律归到 unknown。 */
+function errorCodeOf(error) {
+  const code = error && typeof error === 'object' ? error.code : undefined;
+  return typeof code === 'string' && code ? code : 'unknown';
+}
+
+/** 401/403 是「这组邮箱 + 令牌不被接受」，和别的 HTTP 错误分开，界面提示也不一样。 */
+function httpFailure(status, statusText, path, detail) {
+  const code = status === 401 || status === 403 ? 'auth' : 'http';
+  return new JiraError(code, t('err.http', { status, statusText, path, detail }));
+}
 /** Sprint 字段的 schema 标识（locale 无关）；找不到时退回 APP 站点的实际字段 id。 */
 const SPRINT_FIELD_SCHEMA = 'com.pyxis.greenhopper.jira:gh-sprint';
 const SPRINT_FIELD_FALLBACK = 'customfield_10020';
@@ -210,6 +238,7 @@ const TEXT = {
     'token.source.readFailed': '读凭据库失败：{message}',
     // 错误与提示
     'err.noCredential': 'Jira 凭据缺失：请把 {key} 写进 DSH 凭据库、设为环境变量，或填进插件配置的 apiToken。',
+    'err.credentialUnreadable': '读不出 DSH 凭据库里的 {key}：{message}',
     'err.noBaseUrl': '还没有配置 Jira 站点地址：打开面板标题右侧的「配置」填上 baseUrl（例如 https://your-site.atlassian.net），或在 profile 的 cordis.patch.yml 那一行里加 baseUrl。',
     'err.noEmail': 'Jira 配置缺少 email：Basic 认证需要登录邮箱。',
     'err.network': '连不上 {baseUrl}（{path}）：{cause}',
@@ -372,6 +401,7 @@ const TEXT = {
     'token.source.missing': 'no value in credential store {key}',
     'token.source.readFailed': 'Failed to read the credential store: {message}',
     'err.noCredential': 'Missing Jira credential: put {key} into the DSH credential store, set it as an environment variable, or fill apiToken in the plugin config.',
+    'err.credentialUnreadable': 'Could not read {key} from the DSH credential store: {message}',
     'err.noBaseUrl': 'No Jira site URL yet: open the "Configure" dialog in the panel header and set baseUrl (for example https://your-site.atlassian.net), or add baseUrl to this profile\'s cordis.patch.yml row.',
     'err.noEmail': 'Missing email in the Jira config: Basic auth requires a login email.',
     'err.network': 'Cannot reach {baseUrl} ({path}): {cause}',
@@ -699,7 +729,23 @@ async function runCommand(jira, raw, signal) {
     restTokens.push(token);
   }
   const rest = restTokens.join(' ').trim();
+  const { jql, scope } = resolveQuery(
+    Object.prototype.hasOwnProperty.call(SCOPE_JQL, rest) ? rest : '',
+    rest && !SCOPE_JQL[rest] ? rest : '',
+  );
 
+  try {
+    return await runQuery(jira, { json, limit, rest, status, jql, scope, signal });
+  } catch (error) {
+    // 面板走 --json：失败也做成结构化载荷（ok:false + error.code），界面才能按类型给提示，
+    // 而不是把一整句报错糊在列表位置。命令行文本输出保持原样抛出（那条命令面本来就该看到错误）。
+    if (!json) throw error;
+    return JSON.stringify(buildWorkListErrorJson(jira, error, { jql, scope, status, limit }), null, 2);
+  }
+}
+
+/** 查询主体：单条 issue 或工作列表；文本 / JSON 两种输出只在这里分叉。 */
+async function runQuery(jira, { json, limit, rest, status, jql, scope, signal }) {
   if (rest && ISSUE_KEY.test(rest.toUpperCase())) {
     const key = rest.toUpperCase();
     const fields = [...LIST_FIELDS, await resolveSprintField(jira, signal), 'description', 'created', 'components', 'comment'];
@@ -709,10 +755,6 @@ async function runCommand(jira, raw, signal) {
       : renderIssue(issue, { settings: jira.settings, includeComments: true, commentLimit: 3 });
   }
 
-  const { jql, scope } = resolveQuery(
-    Object.prototype.hasOwnProperty.call(SCOPE_JQL, rest) ? rest : '',
-    rest && !SCOPE_JQL[rest] ? rest : '',
-  );
   // 状态筛选必须插在 ORDER BY 之前（withJqlClause 负责），否则真实站点直接 400。
   const filteredJql = applyStatus(jql, status);
   // 面板高亮用的优先级名次跟搜索并行拿；拿不到就是 null，界面退回按名字判断，不拖慢也不影响这次查询。
@@ -894,6 +936,7 @@ function createJira(ctx, settings) {
     async token() {
       const key = settings.credentialKey || DEFAULT_CREDENTIAL_KEY;
       const store = credentialStore(ctx);
+      let storeError;
       if (store && typeof store.resolve === 'function') {
         try {
           const hit = await store.resolve(key);
@@ -902,8 +945,9 @@ function createJira(ctx, settings) {
             jira.tokenSource = t('token.source.credential', { key });
             return value;
           }
-        } catch {
-          /* 凭据服务不可用时继续回退 */
+        } catch (error) {
+          // 凭据服务不可用时继续回退；三条路都没有值时，这个错误决定报「没配」还是「读不出」。
+          storeError = error;
         }
       }
       const fromEnv = process.env[key];
@@ -915,9 +959,13 @@ function createJira(ctx, settings) {
         jira.tokenSource = t('token.source.config');
         return settings.apiToken;
       }
-      throw new Error(
-        t('err.noCredential', { key }),
-      );
+      if (storeError) {
+        throw new JiraError('credential_unreadable', t('err.credentialUnreadable', {
+          key,
+          message: storeError?.message ?? storeError,
+        }));
+      }
+      throw new JiraError('no_credential', t('err.noCredential', { key }));
     },
 
     /** 每次请求现读 email：它是 volatile 字段，配置页改完立刻生效，不用重装插件。 */
@@ -927,8 +975,8 @@ function createJira(ctx, settings) {
     },
 
     async get(path, params, signal) {
-      if (!this.site()) throw new Error(t('err.noBaseUrl'));
-      if (!this.email()) throw new Error(t('err.noEmail'));
+      if (!this.site()) throw new JiraError('no_base_url', t('err.noBaseUrl'));
+      if (!this.email()) throw new JiraError('no_email', t('err.noEmail'));
       const token = await this.token();
 
       const query = new URLSearchParams();
@@ -952,7 +1000,7 @@ function createJira(ctx, settings) {
         // 这里把 cause 里的真实原因带出来，方便自查。
         if (signal?.aborted) throw error;
         const cause = error?.cause?.code ?? error?.cause?.message ?? error?.message ?? error;
-        throw new Error(t('err.network', { baseUrl: settings.baseUrl, path, cause }));
+        throw new JiraError('network', t('err.network', { baseUrl: settings.baseUrl, path, cause }));
       }
       const text = await response.text();
 
@@ -964,16 +1012,16 @@ function createJira(ctx, settings) {
       }
 
       if (!response.ok) {
-        throw new Error(t('err.http', { status: response.status, statusText: response.statusText, path, detail: jiraErrorDetail(body, text) }));
+        throw httpFailure(response.status, response.statusText, path, jiraErrorDetail(body, text));
       }
-      if (body === undefined) throw new Error(t('err.notJson', { path }));
+      if (body === undefined) throw new JiraError('not_json', t('err.notJson', { path }));
       return body;
     },
 
     /** 写操作（目前只用于状态流转）。Jira 成功时可能返回 204，所以允许空 body。 */
     async post(path, payload, signal) {
-      if (!this.site()) throw new Error(t('err.noBaseUrl'));
-      if (!this.email()) throw new Error(t('err.noEmail'));
+      if (!this.site()) throw new JiraError('no_base_url', t('err.noBaseUrl'));
+      if (!this.email()) throw new JiraError('no_email', t('err.noEmail'));
       const token = await this.token();
       const auth = Buffer.from(`${this.email()}:${token}`, 'utf8').toString('base64');
 
@@ -992,7 +1040,7 @@ function createJira(ctx, settings) {
       } catch (error) {
         if (signal?.aborted) throw error;
         const cause = error?.cause?.code ?? error?.cause?.message ?? error?.message ?? error;
-        throw new Error(t('err.network', { baseUrl: settings.baseUrl, path, cause }));
+        throw new JiraError('network', t('err.network', { baseUrl: settings.baseUrl, path, cause }));
       }
 
       const text = await response.text();
@@ -1003,7 +1051,7 @@ function createJira(ctx, settings) {
         body = undefined;
       }
       if (!response.ok) {
-        throw new Error(t('err.http', { status: response.status, statusText: response.statusText, path, detail: jiraErrorDetail(body, text) }));
+        throw httpFailure(response.status, response.statusText, path, jiraErrorDetail(body, text));
       }
       return body;
     },
@@ -1223,6 +1271,8 @@ function startWatcher(ctx, jira, settings) {
     checks: 0,
     failures: 0,
     lastError: '',
+    /** 失败的类型（见 errorCodeOf / JiraError）；面板据此给「凭据没配」这类提示，而不是糊一句原文。 */
+    lastErrorCode: '',
     baseline: false,
     pending: [],
     seen: new Map(),
@@ -1317,6 +1367,7 @@ async function pollWatch(jira, state) {
   } catch (error) {
     state.failures += 1;
     state.lastError = String(error?.message ?? error);
+    state.lastErrorCode = errorCodeOf(error);
     state.checkedAt = new Date().toISOString();
     throw error;
   }
@@ -1335,6 +1386,7 @@ async function pollWatch(jira, state) {
   state.checks += 1;
   state.failures = 0;
   state.lastError = '';
+  state.lastErrorCode = '';
   state.checkedAt = new Date().toISOString();
 
   if (!state.baseline) {
@@ -1394,6 +1446,7 @@ function watchSnapshot(state) {
     checks: state.checks,
     failures: state.failures,
     lastError: state.lastError,
+    lastErrorCode: state.lastErrorCode,
     baseline: state.baseline,
     counts: { ...counts, total: state.pending.length },
     changes: state.pending.slice(-20).reverse(),
@@ -2759,6 +2812,35 @@ function buildWorkListJson(issues, jql, scope, jira, sprint, page, totals) {
     counts: { ...counts, total: items.length },
     sprints: groupBySprint(items),
     items,
+  };
+}
+
+/**
+ * `--json` 失败时的载荷：字段与正常载荷同一套（列表为空），另外带 `ok:false` 与 `error{code,message}`。
+ * 界面只读 `ok` / `error.code` 选提示文案，脚本也能按 code 分支 —— 两边都不必去匹配报错文案。
+ */
+function buildWorkListErrorJson(jira, error, { jql, scope, status, limit }) {
+  return {
+    ok: false,
+    source: 'dsh-jira-work-overview',
+    generatedAt: new Date().toISOString(),
+    error: { code: errorCodeOf(error), message: String(error?.message ?? error) },
+    query: { scope, jql },
+    project: jira.settings.projectKey,
+    projects: [],
+    limit,
+    hasMore: false,
+    total: null,
+    projectTotals: null,
+    status: typeof status === 'string' ? status : '',
+    statusOptions: statusOptionsOf([]),
+    credentialSource: jira.tokenSource,
+    notes: [...jira.notes],
+    sprint: null,
+    watch: watchSnapshot(jira.watch),
+    counts: { new: 0, indeterminate: 0, done: 0, total: 0 },
+    sprints: [],
+    items: [],
   };
 }
 

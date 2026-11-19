@@ -72,6 +72,27 @@ window.__ModuleLoader__.load({
     const GROUP_ESTIMATE = 64;
     const ROW_OVERSCAN = 10;
 
+    /**
+     * 失败类型 → 提示文案（host 在 `--json` 载荷的 `error.code` 里给类型，见 index.js 的 JiraError）。
+     * `config: true` = 「去配置」能解决，给一个直达按钮；`detail: true` = 提示之外还该看原始 message
+     * （站点 / 网络给的具体原因）。表里没有的 code 一律按 unknown 处理。
+     */
+    const FAILURES = {
+      no_credential: { title: 'failCredTitle', hint: 'failCredHint', config: true },
+      credential_unreadable: { title: 'failCredUnreadableTitle', hint: 'failCredUnreadableHint', config: true, detail: true },
+      no_email: { title: 'failEmailTitle', hint: 'failEmailHint', config: true },
+      no_base_url: { title: 'failBaseUrlTitle', hint: 'failBaseUrlHint', config: true },
+      auth: { title: 'failAuthTitle', hint: 'failAuthHint', config: true, detail: true },
+      network: { title: 'failNetworkTitle', hint: 'failNetworkHint', detail: true },
+      http: { title: 'failHttpTitle', hint: 'failHttpHint', detail: true },
+      not_json: { title: 'failNotJsonTitle', hint: 'failNotJsonHint', detail: true },
+      unknown: { title: 'failUnknownTitle', hint: 'failUnknownHint', detail: true },
+    };
+
+    function failureMeta(code) {
+      return Object.prototype.hasOwnProperty.call(FAILURES, code) ? FAILURES[code] : FAILURES.unknown;
+    }
+
     /** 条数语义的客户端归一化（与 host 侧 index.js 的 normalizeLimit 同步）：
      *  **0 = 不限制**，正数 clamp 到 10–5000，其它（非法 / 负数）回落到 fallback。 */
     function normalizeLimit(value, fallback = LIMIT_DEFAULT) {
@@ -121,6 +142,27 @@ window.__ModuleLoader__.load({
         noSession: '先在左侧打开一个会话：命令需要在某个会话上执行。',
         unknownCommand: '命令没有执行：/jira 未注册或语法不对。',
         commandFailed: '命令执行失败',
+        // 可分类的失败（host 在 --json 载荷里给 error.code）：只显示提示 + 按钮，原始报错收进「详情」。
+        failCredTitle: '还没有配置 Jira 令牌',
+        failCredHint: '任务列表需要 Jira API token。点「去配置」填入账号邮箱和令牌，保存后再点「重试」。',
+        failCredUnreadableTitle: '读不出凭据库里的令牌',
+        failCredUnreadableHint: 'DSH 凭据库这次没有返回令牌，任务列表暂时拿不到凭据。稍后重试，或到「配置」里重新保存一次令牌。',
+        failEmailTitle: '还缺账号邮箱',
+        failEmailHint: 'Jira 的 Basic 认证 = 邮箱 + API token，点「去配置」补上邮箱。',
+        failBaseUrlTitle: '还没有配置 Jira 站点',
+        failBaseUrlHint: '在 profile 的 cordis.patch.yml 里给这一行加上 baseUrl（例如 https://your-site.atlassian.net），或在「配置」里打开 patch 文件。',
+        failAuthTitle: 'Jira 不认这组邮箱 / 令牌',
+        failAuthHint: '令牌可能已经过期或被撤销：到 Atlassian 账号页重新生成，再到「去配置」里换成新令牌。',
+        failNetworkTitle: '连不上 Jira',
+        failNetworkHint: '检查网络 / 代理，以及 baseUrl 是否写对，然后重试。',
+        failHttpTitle: 'Jira 返回了错误',
+        failHttpHint: '站点拒绝了这次查询，原始信息见下方。',
+        failNotJsonTitle: 'Jira 返回的不是 JSON',
+        failNotJsonHint: 'baseUrl 可能指到了别的站点（或代理的登录页），先确认它指向 Jira。',
+        failUnknownTitle: '读取任务列表失败',
+        failUnknownHint: '这次失败没有可归类的类型，原始信息见下方。',
+        failOpenConfig: '去配置',
+        failDetail: '原始信息：{message}',
         untitled: '（无摘要）',
         parent: '父 {key}',
         watch: '实时监视中',
@@ -264,6 +306,28 @@ window.__ModuleLoader__.load({
         noSession: 'Open a session first: the command must run on one.',
         unknownCommand: 'Command did not run: /jira unregistered or malformed.',
         commandFailed: 'Command failed',
+        // Classified failures (host puts error.code into the --json payload): show a hint + a button,
+        // tuck the raw message into "details".
+        failCredTitle: 'No Jira token yet',
+        failCredHint: 'The task list needs a Jira API token. Open "Configure", fill in your account email and token, then hit "Retry".',
+        failCredUnreadableTitle: 'Could not read the stored token',
+        failCredUnreadableHint: 'The DSH credential store did not return the token this time. Retry in a moment, or re-save the token under "Configure".',
+        failEmailTitle: 'Account email missing',
+        failEmailHint: 'Jira Basic auth is email + API token. Open "Configure" and add the email.',
+        failBaseUrlTitle: 'No Jira site configured',
+        failBaseUrlHint: 'Add baseUrl to this plugin\'s row in the profile\'s cordis.patch.yml (for example https://your-site.atlassian.net), or open the patch file from "Configure".',
+        failAuthTitle: 'Jira rejected this email / token pair',
+        failAuthHint: 'The token may be expired or revoked: generate a new one in your Atlassian account page, then replace it under "Configure".',
+        failNetworkTitle: 'Cannot reach Jira',
+        failNetworkHint: 'Check the network / proxy and that baseUrl is right, then retry.',
+        failHttpTitle: 'Jira returned an error',
+        failHttpHint: 'The site rejected this query; the raw message is below.',
+        failNotJsonTitle: 'Jira did not return JSON',
+        failNotJsonHint: 'baseUrl may point somewhere else (or at a proxy login page) — confirm it points at Jira.',
+        failUnknownTitle: 'Could not load the task list',
+        failUnknownHint: 'This failure has no known type; the raw message is below.',
+        failOpenConfig: 'Configure',
+        failDetail: 'Raw message: {message}',
         untitled: '(no summary)',
         parent: 'parent {key}',
         watch: 'Live watch on',
@@ -437,6 +501,8 @@ window.__ModuleLoader__.load({
       project: 'ALL',
       loading: false,
       error: '',
+      /** 可分类的失败（host --json 载荷的 error 对象）：{code, message}；有它时不显示原始错误串。 */
+      failure: null,
       scope: DEFAULT_SCOPE,
       data: null,
       collapsed: {},
@@ -755,13 +821,13 @@ window.__ModuleLoader__.load({
       const sessionId = currentSessionId();
       if (!sessionId) {
         cancelLoad();
-        patch({ loading: false, scope: next, error: t('noSession') });
+        patch({ loading: false, scope: next, error: t('noSession'), failure: null });
         return;
       }
       const seq = cancelLoad();
       const controller = typeof AbortController === 'function' ? new AbortController() : undefined;
       loadController = controller;
-      patch({ loading: true, error: '', scope: next });
+      patch({ loading: true, error: '', failure: null, scope: next });
       try {
         // host 的 i18n 已落地：命令面也把界面语言捎过去，否则 host 渲染的文案会跟面板不一致。
         // 面板固定发 scope（all，含已完成/已关闭）；`--status=` 是单选状态筛选，空串表示不筛。
@@ -778,10 +844,16 @@ window.__ModuleLoader__.load({
         const outcome = result.value.result;
         if (!outcome || outcome.kind !== 'success') throw new Error(outcome?.text || t('commandFailed'));
         const data = JSON.parse(outcome.text);
-        patch({ data, error: '', loading: false });
+        // host 在 --json 失败时不再 throw，而是回一份形状正常的 ok:false 载荷：这里只留
+        // error.code / message，界面按 code 给提示，不把整句报错糊在列表位置。
+        if (data && data.ok === false) {
+          patch({ data: null, failure: data.error ?? { code: 'unknown', message: '' }, error: '', loading: false });
+          return;
+        }
+        patch({ data, failure: null, error: '', loading: false });
       } catch (error) {
         if (seq !== loadSeq) return; // 被新请求取代 / 主动取消：不当成错误显示
-        patch({ error: String(error?.message ?? error), loading: false });
+        patch({ error: String(error?.message ?? error), failure: null, loading: false });
       } finally {
         if (loadController === controller) loadController = null;
       }
@@ -1007,10 +1079,19 @@ window.__ModuleLoader__.load({
 .jmw-state{padding:34px 18px;text-align:center;color:var(--dsw-alias-label-tertiary,#8a8f99);font-size:12px}
 .jmw-state.err{color:var(--dsw-alias-label-primary,#1b1d22)}
 .jmw-state .msg{margin-bottom:12px;white-space:pre-wrap;word-break:break-word}
+/* 可分类的失败（没配令牌 / 站点 / 网络…）：一句「怎么办」+ 按钮，原始报错只在需要时以小字附上。 */
+.jmw-failure{padding-top:40px}
+.jmw-failure-title{font-size:13px;font-weight:600;color:var(--dsw-alias-label-primary,#1b1d22);margin-bottom:6px}
+.jmw-failure-hint{max-width:320px;margin:0 auto 14px;line-height:1.6;color:var(--dsw-alias-label-secondary,#5c6270)}
+.jmw-failure-actions{display:flex;justify-content:center;gap:8px}
+.jmw-failure-detail{max-width:360px;margin:14px auto 0;font-size:11px;line-height:1.5;
+  color:var(--dsw-alias-label-tertiary,#8a8f99);white-space:pre-wrap;word-break:break-word}
 .jmw-btn{padding:5px 14px;font:inherit;font-size:12px;color:var(--dsw-alias-label-primary,#1b1d22);cursor:pointer;
   background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06));border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.1));
   border-radius:var(--dsw-radius-sm,8px)}
 .jmw-btn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.1))}
+.jmw-btn.primary{color:#fff;background:var(--dsw-alias-brand-primary,#4d6bfe);border-color:transparent}
+.jmw-btn.primary:hover{background:color-mix(in srgb,var(--dsw-alias-brand-primary,#4d6bfe) 86%,#000)}
 .jmw-skel{height:13px;margin:12px 40px;border-radius:7px;
   background:linear-gradient(90deg,transparent,var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.08)),transparent);
   background-size:220px 100%;animation:jmw-pulse 1.1s ease-in-out infinite}
@@ -1210,7 +1291,13 @@ window.__ModuleLoader__.load({
       if (info.supported === false) {
         return h('span', { key: 'watch', className: 'warn' }, t('watchUnsupported', { reason: info.reason || '—' }));
       }
-      if (info.error) return h('span', { key: 'watch', className: 'warn' }, t('watchError', { message: info.error }));
+      if (info.error) {
+        // 后台监视失败也要说人话：host 把类型放在 lastErrorCode 里，命中表就用那句提示当原因，
+        // 否则退回原始 message（协议 / 站点细节只有它说得清）。
+        const meta = info.lastErrorCode ? failureMeta(info.lastErrorCode) : null;
+        const message = meta ? t(meta.title) : info.error;
+        return h('span', { key: 'watch', className: 'warn' }, t('watchError', { message }));
+      }
       if (info.enabled === false) return h('span', { key: 'watch' }, t('watchOff'));
       const checked = info.checkedAt ? `　${t('watchChecked', { time: formatTime(info.checkedAt) })}` : '';
       return h('span', { key: 'watch' }, `${t('watch')}${checked}`);
@@ -1553,7 +1640,33 @@ window.__ModuleLoader__.load({
         : null;
 
       let body;
-      if (state.error) {
+      if (state.failure) {
+        // 可分类的失败：标题 + 一句「怎么办」+ 按钮；原始报错只在 detail 类里以小字附在下面。
+        const meta = failureMeta(state.failure.code);
+        const actions = [];
+        if (meta.config) {
+          actions.push(h('button', {
+            key: 'config',
+            type: 'button',
+            className: 'jmw-btn primary',
+            onClick: () => setCredOpen(true),
+          }, t('failOpenConfig')));
+        }
+        actions.push(h('button', {
+          key: 'retry',
+          type: 'button',
+          className: 'jmw-btn',
+          onClick: () => load(snapshot.scope),
+        }, t('retry')));
+        body = h('div', { className: 'jmw-state err jmw-failure' }, [
+          h('div', { key: 'title', className: 'jmw-failure-title' }, t(meta.title)),
+          h('div', { key: 'hint', className: 'jmw-failure-hint' }, t(meta.hint)),
+          h('div', { key: 'actions', className: 'jmw-failure-actions' }, actions),
+          meta.detail && state.failure.message
+            ? h('div', { key: 'detail', className: 'jmw-failure-detail' }, t('failDetail', { message: state.failure.message }))
+            : null,
+        ]);
+      } else if (state.error) {
         body = h('div', { className: 'jmw-state err' }, [
           h('div', { key: 'msg', className: 'msg' }, state.error),
           h('button', { key: 'retry', type: 'button', className: 'jmw-btn', onClick: () => load(snapshot.scope) }, t('retry')),

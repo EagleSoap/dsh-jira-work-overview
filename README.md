@@ -152,6 +152,9 @@ The plugin's own copy follows the DSH language setting; English and Chinese ship
 | footer says "live watch unavailable" | the Electron shell did not expose a fetch transport; the panel/badge degrade, tools still work |
 | footer says "live watch disconnected" | transient transport error; it retries with backoff |
 | token rejected when saving | the email + token pair is wrong, or the token has no Jira access |
+| panel says "No Jira token yet" | nothing is configured yet: click **Configure** and paste an API token (or set `JIRA_API_TOKEN`) |
+| panel says "Jira rejected this email / token pair" | 401/403 from Jira: regenerate the token; the raw response is under the hint |
+| panel says "Could not read the stored token" | the credential store returned an error rather than a value: save the token again from **Configure** |
 
 Behind a corporate proxy on Windows, DSH needs the proxy env vars it was started with (`NODE_USE_ENV_PROXY=1`) — the plugin itself never talks to the network outside `fetch`.
 

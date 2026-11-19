@@ -365,6 +365,21 @@ let sessionRows = { 'sess-main': { id: 'sess-main', retainedBy: { mainView: 1 } 
 
 /* 命令桩：记录命令，并按 `--status=` 过滤 fixture（status 名字可能带空格，例如 IN QA）。 */
 const activeFixture = { current: FIXTURE };
+/* 失败桩：非 null 时命令返回 host 的 ok:false 载荷（error.code 决定面板给哪种提示）。 */
+const activeFailure = { current: null };
+const failurePayload = ({ code, message }) => ({
+  ok: false,
+  error: { code, message },
+  query: { scope: 'all', jql: '' },
+  items: [],
+  sprints: [],
+  statusOptions: [],
+  notes: [],
+  status: '',
+  total: null,
+  hasMore: false,
+  limit: 0,
+});
 const statusOf = (line) => {
   const hit = /--status=(.*?)(?=\s--\w|$)/.exec(String(line));
   return hit ? hit[1].trim() : '';
@@ -394,6 +409,9 @@ const clientCtx = {
         async execute(sessionId, line) {
           calls.push({ sessionId, line });
           completed.push(line);
+          if (activeFailure.current) {
+            return { ok: true, value: { commandId: 'jira', result: { kind: 'success', text: JSON.stringify(failurePayload(activeFailure.current)) } } };
+          }
           return { ok: true, value: { commandId: 'jira', result: { kind: 'success', text: JSON.stringify(payloadFor(line)) } } };
         },
       };
@@ -733,6 +751,64 @@ check(
 activeFixture.current = FIXTURE;
 await pickStatus('全部状态');
 
+/* ---------------- I：可分类的失败 → 提示文字（不是原始报错） ----------------
+   host 在 --json 失败时回 ok:false + error.code；面板按 code 选文案，「去配置」直达令牌弹窗，
+   原始 message 只在 detail 类里以小字附上（无令牌这类「一句话能解决」的不该甩一坨报错）。 */
+const clsOf = (row) => String(row.props?.className ?? '');
+const failureNode = (name) => collect(panel, (row) => clsOf(row) === name)[0];
+const failTitle = () => text(failureNode('jmw-failure-title')).trim();
+const failHint = () => text(failureNode('jmw-failure-hint')).trim();
+const failDetails = () => collect(panel, (row) => clsOf(row) === 'jmw-failure-detail');
+const failButtons = () => collect(panel, (row) => clsOf(row).split(' ')[0] === 'jmw-btn').map((row) => text(row).trim());
+const refreshBtn = () => collect(panel, (row) => row.type === 'button' && row.props?.['aria-label'] === '刷新')[0];
+
+activeFailure.current = { code: 'no_credential', message: 'Missing Jira credential: put JIRA_API_TOKEN into the DSH credential store…' };
+refreshBtn().props.onClick();
+await settle();
+panel = renderPanel();
+console.log('\nI 没配令牌：标题 =', JSON.stringify(failTitle()), '| 提示 =', JSON.stringify(failHint()), '| 按钮 =', JSON.stringify(failButtons()), '| 原始报错可见 =', failDetails().length);
+check(
+  failTitle() === '还没有配置 Jira 令牌'
+  && failHint().includes('Jira API token')
+  && failButtons().includes('去配置')
+  && failButtons().includes('重试')
+  && failDetails().length === 0,
+  'I 无令牌 → 提示文字 + 去配置 / 重试，且不显示原始报错',
+  `${failTitle()} / ${failButtons().join(',')}`,
+);
+const openConfig = collect(panel, (row) => clsOf(row).split(' ')[0] === 'jmw-btn' && text(row).trim() === '去配置')[0];
+openConfig.props.onClick();
+panel = renderPanel();
+check(
+  collect(panel, (row) => clsOf(row) === 'jmw-credmodal').length === 1,
+  'I 「去配置」直接打开令牌弹窗',
+  `jmw-credmodal=${collect(panel, (row) => clsOf(row) === 'jmw-credmodal').length}`,
+);
+keyHandlers[keyHandlers.length - 1]({ key: 'Escape', preventDefault() {} });
+panel = renderPanel();
+
+/* detail 类（站点 / 网络）：提示之外要能看见原始 message，否则用户没法判断到底哪儿错了。 */
+activeFailure.current = { code: 'auth', message: 'Jira 401 Unauthorized (/rest/api/3/search/jql)：Check your email and API token' };
+refreshBtn().props.onClick();
+await settle();
+panel = renderPanel();
+console.log('I 401：标题 =', JSON.stringify(failTitle()), '| 详情小字 =', JSON.stringify(text(failDetails()[0]).trim().slice(0, 40)));
+check(
+  failTitle() === 'Jira 不认这组邮箱 / 令牌' && failDetails().length === 1 && text(failDetails()[0]).includes('401'),
+  'I 401 → 「邮箱 / 令牌不被接受」+ 原始信息收在详情里',
+  failTitle(),
+);
+const retryBtn = collect(panel, (row) => clsOf(row).split(' ')[0] === 'jmw-btn' && text(row).trim() === '重试')[0];
+activeFailure.current = null;
+retryBtn.props.onClick();
+await settle();
+panel = renderPanel();
+check(
+  rows(panel).length > 0 && collect(panel, (row) => clsOf(row) === 'jmw-failure').length === 0,
+  'I 恢复后点重试 → 回到正常列表（失败态被清掉）',
+  `rows=${rows(panel).length}`,
+);
+
 /* ---------------- F：兜底（基座模块表里没有 @tanstack/react-virtual） ----------------
    client 在 factory 里 try/catch 地 require 它；这里再开一个模块实例、这次的 require 口故意不给它，
    验证：不崩、退回「直接渲染全部行」、并 console.warn 一次。 */
@@ -769,6 +845,6 @@ console.log('\nF 兜底（拿不到 @tanstack/react-virtual）：warn 次数 =',
   '| 占位高 =', collect(fbTree, (row) => String(row.props?.className ?? '') === 'jmw-vlist')[0]?.props?.style?.height);
 
 for (const off of effects) { try { off?.(); } catch { /* ignore */ } }
-console.log(failed === 0 ? '\n=== visual G/H 段（条目身份 / 估算 / 优先级名次）：全部通过 ===' : `\n=== visual G/H 段（条目身份 / 估算 / 优先级名次）：${failed} 项失败 ===`);
+console.log(failed === 0 ? '\n=== visual G/H/I 段（条目身份 / 估算 / 优先级名次 / 失败提示）：全部通过 ===' : `\n=== visual G/H/I 段（条目身份 / 估算 / 优先级名次 / 失败提示）：${failed} 项失败 ===`);
 console.log('done');
 process.exit(failed === 0 ? 0 : 1);

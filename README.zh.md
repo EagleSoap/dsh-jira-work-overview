@@ -108,6 +108,12 @@ all    : assignee = currentUser() ORDER BY updated DESC
   点一个就写入，成功后顶部出现绿色提示 `APP-4051 已改为 IN QA`，并自动重取列表（状态变了分组也跟着变）；
   失败（例如某个流转要求必填字段）把 Jira 的报错原样显示在下拉里，不静默吞掉。
 
+- **失败会说人话**：没配令牌 / 站点地址、凭据读不出来、令牌过期（401）、网络不通、站点返回非 JSON，
+  面板不再把 Host 的原始报错糊在列表位置，而是标题 + 一句「怎么办」：`去配置` 直接打开令牌弹窗、
+  `重试` 重新查询；只有需要看原文的那几类（认证失败 / 网络 / 站点错误）才把原始信息以小字附在下面。
+  错误类型来自 `--json` 载荷里的 `error.code`（`no_credential` / `credential_unreadable` / `no_email` /
+  `no_base_url` / `auth` / `network` / `http` / `not_json` / `unknown`），不是靠匹配报错文案；
+  文本模式的 `/jira` 仍返回原始报错。
 - 数据来源就是上面的 `/jira --json`：client 半边用
   `ctx.remote.commands.execute(sessionId, '/jira --json all --limit=0 [--status=<名字>] --lang=<lang>', [])`
   在**当前会话**上执行该命令，再解析 JSON

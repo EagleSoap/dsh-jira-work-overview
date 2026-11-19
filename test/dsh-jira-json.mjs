@@ -54,6 +54,11 @@ console.log('tools registered:', toolCount, '| command:', registered ? `${regist
 const list = await registered.handler({ rawInput: '--json' });
 console.log(`\n/jira --json → kind=${list.kind}`);
 const payload = JSON.parse(list.text);
+// --json 失败时 host 回 ok:false + error.code（不再抛错）。这个探针要真站点数据，拿不到就 SKIP。
+if (payload.ok === false) {
+  console.log(`SKIP: /jira --json 失败（${payload.error?.code}）：${payload.error?.message ?? '-'}`);
+  process.exit(0);
+}
 console.log('顶层字段:', Object.keys(payload).join(', '));
 console.log('query:', JSON.stringify(payload.query));
 console.log('credentialSource:', payload.credentialSource);
