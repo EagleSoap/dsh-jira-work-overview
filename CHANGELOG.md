@@ -6,6 +6,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Fixed
+
+- **四条 `/api` 路由在真宿主里根本没注册 —— 配置页「读取令牌状态失败：HTTP 404」的根因。** 插件在 `apply()`
+  里同步 `ctx.get('connection')` 取 Fetch 注册表；而 `client-connection` 的 `apply` 是异步的（先建 BrowserAuth
+  的密钥），同一个加载批里它还没 provide，`ctx.get` 只返回 `undefined`，之后也不会有人再补 —— 角标状态 / 状态流转 /
+  令牌配置 / 配置写入四条路由就这样静默丢掉（Host 侧只剩三行「这个 profile 没有 connection.fetch 服务」的 note，
+  浏览器侧 `GET /api/jira-work-overview/credential` 直接 404）。现在四条路由统一走 `ctx.inject(['connection'], …)`，
+  等服务就绪再注册（服务重建时会重跑）；没有 `ctx.inject` 的老宿主 / 离线测试桩仍退回同步读取。
+- `test/dsh-jira-credential.mjs` 的宿主桩改成真宿主的时序：加载时 `ctx.get('connection')` 返回 `undefined`，
+  只有 `inject` 回调能看到它；回调执行后必须凑满 4 条路由，否则打印 `FAIL` 并以 1 退出。这条回归以前是
+  「离线测试全绿、真机路由全 404」。
+
 ## [0.15.0] - 2026-11-19
 
 改状态变轻了（不再为一行变化重拉整个列表），也不会再被自己的操作通知一次；面板的失败提示按类型说话。

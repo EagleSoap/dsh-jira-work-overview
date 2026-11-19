@@ -284,6 +284,13 @@ const settingsService = {
     settingsWrites.push({ ns, ops, expectedRevision });
   },
 };
+// 照真宿主的时序搭桩：client-connection 的 apply 是异步的（要先建 BrowserAuth 密钥），同一个
+// 加载批里 ctx.get('connection') 还是 undefined，只有 ctx.inject 的回调会在服务 provide 之后跑。
+// 旧实现同步 ctx.get 拿不到就永久丢掉四条路由（浏览器侧 GET /api/jira-work-overview/credential 404），
+// 这里让这种回归直接失败。
+const connectionService = { fetch: { register(route) { watchRoutes.push(route); return async () => {}; } } };
+let connectionReady = false;
+const pendingInjects = [];
 const hostCtx = {
   get(name) {
     if (name === CRED) return credentials;
@@ -291,10 +298,12 @@ const hostCtx = {
     if (name === 'commands') {
       return { register(definition) { hostCommands.push(definition); return () => {}; } };
     }
-    if (name === 'connection') {
-      return { fetch: { register(route) { watchRoutes.push(route); return async () => {}; } } };
-    }
+    if (name === 'connection') return connectionReady ? connectionService : undefined;
     return undefined;
+  },
+  inject(deps, callback) {
+    pendingInjects.push({ deps: Array.isArray(deps) ? deps : [], callback });
+    return {};
   },
   tools: { register(definition) { hostTools.set(definition.name, definition); } },
 };
@@ -316,6 +325,19 @@ console.log('volatile 引用形态: watchIntervalMs =', typeof hostConfig.watchI
 host.apply(hostCtx, hostConfig);
 const hostCommand = hostCommands.find((row) => row.name === 'jira');
 console.log('host: tools =', [...hostTools.keys()].join(','), '| commands =', hostCommands.map((row) => row.name).join(','));
+
+/* 服务就绪：真宿主里 client-connection 稍后才 provide，插件必须用 ctx.inject 等它。 */
+console.log('加载时 connection 已就绪:', connectionReady, '（真宿主为 false）| 待执行 inject 回调:', pendingInjects.length);
+const connectionInjects = pendingInjects.filter((row) => row.deps.includes('connection'));
+if (connectionInjects.length === 0) {
+  console.log('FAIL: 插件没有通过 ctx.inject 等 connection 就绪 —— 同步 ctx.get 会永久丢掉四条 /api 路由（浏览器侧 404）');
+  process.exit(1);
+}
+connectionReady = true;
+// 回调收到的是拿到该服务的子上下文；其余服务照旧从同一份桩里取。
+const readyCtx = { get: (name) => hostCtx.get(name), inject: hostCtx.inject, tools: hostCtx.tools };
+for (const row of connectionInjects) row.callback(readyCtx);
+console.log('connection 就绪后注册的路由数:', watchRoutes.length, '（期望 4）');
 
 /* --------------------------------------------------------- client 半边 */
 

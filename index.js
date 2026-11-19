@@ -222,6 +222,7 @@ const TEXT = {
     'note.noCredentialRouteError': '未注册令牌配置通道（{path}）：{message}',
     'note.noSettingsRoute': '未注册配置写入通道（{path}）：这个 profile 没有 connection.fetch 服务；仍可直接改 profile 的 cordis.patch.yml。',
     'note.noSettingsRouteError': '未注册配置写入通道（{path}）：{message}',
+    'note.noRouteInject': '未能等待 connection 服务就绪（{message}），已改为立即注册 /api 通道。',
     'note.credUnavailable': '凭据服务不可用，{key} 仍从配置里的明文 token 读取。',
     'note.tokenMigrated': '已把配置里的明文 token 迁移进 DSH 凭据库（{key}），可以从插件配置里删除 apiToken 了。',
     'note.tokenMigrateUnreadable': '凭据库写入 {key} 后读不回来，仍从配置里的明文 token 读取。',
@@ -387,6 +388,7 @@ const TEXT = {
     'note.noCredentialRouteError': 'Did not register the token config channel ({path}): {message}',
     'note.noSettingsRoute': 'Did not register the settings write channel ({path}): this profile has no connection.fetch service; you can still edit the profile cordis.patch.yml directly.',
     'note.noSettingsRouteError': 'Did not register the settings write channel ({path}): {message}',
+    'note.noRouteInject': 'Could not wait for the connection service ({message}); registered the /api channels immediately.',
     'note.credUnavailable': 'Credential service unavailable; {key} is still read from the plaintext token in config.',
     'note.tokenMigrated': 'Migrated the plaintext token from config into the DSH credential store ({key}); you can remove apiToken from the plugin config now.',
     'note.tokenMigrateUnreadable': 'Wrote {key} into the credential store but could not read it back; still reading the plaintext token from config.',
@@ -650,13 +652,7 @@ export function apply(ctx, config) {
 
   // 后台监视：本机定时轮询 + 变化时的系统通知；面板角标通过 /api 之下的精确 Fetch 路由读同一份状态。
   jira.watch = startWatcher(ctx, jira, settings);
-  registerWatchRoute(ctx, jira, jira.watch);
-  // 面板里「改状态」用的通道（GET 列可用流转 / POST 执行流转）。
-  registerTransitionRoute(ctx, jira);
-  // 插件配置页里的令牌填写通道（GET 打码状态 / POST 保存或清除），仍写同一个凭据库键。
-  registerCredentialRoute(ctx, jira, settings);
-  // 面板「配置」里的后台监视表单（轮询开关 / 间隔 / 通知）走宿主 settings 服务写 volatile 字段。
-  registerSettingsRoute(ctx, jira, settings);
+  registerApiRoutes(ctx, jira, settings);
 
   ctx.tools.register(myWorkTool(jira, settings));
   ctx.tools.register(issueTool(jira, settings));
@@ -666,6 +662,37 @@ export function apply(ctx, config) {
   // 旧版把 token 明文写在 cordis.patch.yml 的 config 里。首次加载时搬进凭据库，
   // 之后明文就可以从配置里删掉（凭据库优先于环境变量和 config）。
   if (settings.apiToken) void migrateLegacyToken(ctx, jira, settings);
+}
+
+/**
+ * 四条 /api 精确 Fetch 路由（角标状态 / 状态流转 / 令牌配置 / 配置写入）。
+ *
+ * **必须等 connection 服务就绪再注册。** client-connection 的 apply 是异步的（要先建 BrowserAuth
+ * 的密钥），同一批加载时同步 `ctx.get('connection')` 拿到的是 undefined，而且之后不会有人再补——
+ * 旧实现就是这样把四条路由全部静默丢掉的：Host 侧只有三行「没有 connection.fetch 服务」的 note，
+ * 浏览器侧 GET /api/jira-work-overview/credential 直接 404（配置页显示「读取令牌状态失败：HTTP 404」）。
+ * `ctx.inject` 的回调在服务 provide 之后才跑（服务重建时还会重跑），路由的生命周期挂在那个上下文上。
+ */
+function registerApiRoutes(ctx, jira, settings) {
+  const install = (routeCtx) => {
+    registerWatchRoute(routeCtx, jira, jira.watch);
+    // 面板里「改状态」用的通道（GET 列可用流转 / POST 执行流转）。
+    registerTransitionRoute(routeCtx, jira);
+    // 插件配置页里的令牌填写通道（GET 打码状态 / POST 保存或清除），仍写同一个凭据库键。
+    registerCredentialRoute(routeCtx, jira, settings);
+    // 面板「配置」里的后台监视表单（轮询开关 / 间隔 / 通知）走宿主 settings 服务写 volatile 字段。
+    registerSettingsRoute(routeCtx, jira, settings);
+  };
+  if (typeof ctx?.inject === 'function') {
+    try {
+      ctx.inject(['connection'], install);
+      return;
+    } catch (error) {
+      jira.notes.push(t('note.noRouteInject', { message: error?.message ?? error }));
+    }
+  }
+  // 老宿主 / 离线测试桩没有 ctx.inject：退回同步读取。
+  install(ctx);
 }
 
 /**

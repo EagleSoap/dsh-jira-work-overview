@@ -152,6 +152,7 @@ The plugin's own copy follows the DSH language setting; English and Chinese ship
 | `Cannot reach https://… (…): ECONNRESET` / `HTTP 000` | your machine cannot reach Jira right now (VPN/proxy/network), not a plugin bug |
 | "No matching work items" with no error row | the query returned nothing — widen the status filter or the project tab |
 | footer says "live watch unavailable" | the Electron shell did not expose a fetch transport; the panel/badge degrade, tools still work |
+| configure dialog says "Reading the token state failed: HTTP 404" | the plugin's `/api` routes were not registered (the host loaded the plugin before its connection service existed) — reload the plugin; a fixed build registers them once the service is up |
 | footer says "live watch disconnected" | transient transport error; it retries with backoff |
 | token rejected when saving | the email + token pair is wrong, or the token has no Jira access |
 | panel says "No Jira token yet" | nothing is configured yet: click **Configure** and paste an API token (or set `JIRA_API_TOKEN`) |
