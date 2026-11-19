@@ -82,7 +82,15 @@ contains one — every fixture token and host is fake (`ATATT3xFfGF0…`, `examp
 
 **Releases are requested, not automatic.** Day-to-day work is committed and pushed; a version bump, the
 `CHANGELOG.md` entry, the tag and the GitHub Release happen only when the maintainer asks for a release —
-one iteration may collect several changes that ship as a single version. When that go-ahead comes:
+one iteration may collect several changes that ship as a single version.
+
+**A release means both ends, in the same go.** When the maintainer says "release", ship the GitHub Release
+*and* the npm package for that version together — never one without the other, and never leave the second
+half "for later". (`v0.14.0` went out GitHub-first and the npm half followed minutes later from a different
+commit; that is exactly the drift step 0 below now prevents.) If one end fails (e.g. npm rejects the
+upload), stop and report the partial state instead of calling the release done.
+
+When that go-ahead comes:
 
 0. **Freeze the release content first, and tag exactly that commit.** The GitHub tag and the npm tarball
    must contain the same bytes: bump `package.json.version`, write the `CHANGELOG.md` entry, finish the
