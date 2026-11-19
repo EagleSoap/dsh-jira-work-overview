@@ -945,13 +945,31 @@ const searchClearOf = () => collect(panel, (row) => row.type === 'button' && Str
 const lastCommand = () => calls[calls.length - 1]?.line ?? '';
 const rowKeys = () => rows(panel).map((row) => text(collect(row, (r) => String(r.props.className ?? '') === 'jmw-key')[0]).trim());
 
+const searchWrapOf = () => collect(panel, (row) => String(row.props.className ?? '').includes('jmw-searchexpand'))[0];
+const searchOpenNow = () => String(searchWrapOf()?.props.className ?? '').includes('open');
+const headerNodeOf = () => collect(panel, (row) => String(row.props.className ?? '') === 'jmw-head')[0];
+const inSearchBox = (cls) => collect(searchBoxOf(), (row) => String(row.props.className ?? '').includes(cls)).length;
+const searchBoxOf = () => collect(panel, (row) => String(row.props.className ?? '') === 'jmw-searchbox')[0];
+
 check(Boolean(searchBtnOf()), 'K 标题栏有搜索按钮');
+check(!collect(panel, (row) => String(row.props.className ?? '') === 'jmw-search').length, 'K 搜索框就在按钮位置（不再单开一行）');
+check(
+  collect(headerNodeOf(), (row) => String(row.props.className ?? '').includes('jmw-searchexpand')).length === 1,
+  'K 搜索容器挂在标题栏里',
+);
+check(!searchOpenNow() && !searchInputOf(), 'K 默认收起：只看得到放大镜按钮');
+// 展开 / 收起必须是宽度过渡（右边缘固定 → 视觉上向左长出来、向右缩回按钮）。
+check(
+  /\.jmw-searchexpand\{[^}]*transition:width/.test(css)
+  && /\.jmw-searchexpand\.open\{[^}]*width:/.test(css)
+  && /\.jmw-searchbox\{[^}]*transition:width/.test(css),
+  'K 展开 / 收起有宽度过渡（向左展开、收回按钮）',
+);
+
 searchBtnOf().props.onClick();
 panel = renderPanel();
-check(Boolean(searchInputOf()), 'K 点开后展开搜索输入行');
-// 输入行是一个毛玻璃框体，放大镜画在框内左侧、输入框与清除按钮也都在框内（不是图标挂框外）。
-const searchBoxOf = () => collect(panel, (row) => String(row.props.className ?? '') === 'jmw-searchbox')[0];
-const inSearchBox = (cls) => collect(searchBoxOf(), (row) => String(row.props.className ?? '').includes(cls)).length;
+check(searchOpenNow() && Boolean(searchInputOf()), 'K 点按钮后在按钮原位展开输入框');
+// 输入框是毛玻璃框体，放大镜画在框内左侧、输入框与清除按钮也都在框内（不是图标挂框外）。
 check(
   Boolean(searchBoxOf()) && inSearchBox('jmw-searchicon') === 1 && inSearchBox('jmw-searchinput') === 1,
   'K 搜索图标与输入框在同一个框体内',
@@ -966,20 +984,42 @@ searchInputOf().props.onKeyDown({ key: 'Enter' });
 await settle();
 panel = renderPanel();
 check(/--search=網上APP$/.test(lastCommand()), 'K 回车后发 --search=（放行尾，整段词不丢）', lastCommand());
+check(searchInputOf().props.value === '', 'K 执行搜索后清空输入框', JSON.stringify(searchInputOf().props.value));
 check(JSON.stringify(rowKeys()) === JSON.stringify(['APP-S1', 'APP-S2']), 'K 搜索结果显示对应任务项', rowKeys().join(','));
 check(groupHeads(panel).some((head) => text(head).includes('APP Sprint 28')), 'K 搜索结果按迭代分组（显示对应迭代）', groupHeads(panel).map((head) => text(head).replace(/\s+/g, ' ').trim()).join(' | '));
 check(subtitleText().includes('搜索：網上APP'), 'K 副标题显示当前搜索词', subtitleText());
 check(Boolean(searchClearOf()) && inSearchBox('jmw-searchclear') === 1, 'K 搜索中显示清除按钮（也在框内右侧）', `clear=${inSearchBox('jmw-searchclear')}`);
+
+// 没执行的草稿：失焦收起后还在，再点开能接着改。
+searchInputOf().props.onChange({ target: { value: '草稿ABC' } });
+panel = renderPanel();
+searchWrapOf().props.onBlur({ relatedTarget: null });
+panel = renderPanel();
+check(!searchOpenNow() && !searchInputOf(), 'K 失焦后收起变回按钮', `open=${searchOpenNow()} input=${Boolean(searchInputOf())}`);
+check(rows(panel).length === 2, 'K 收起时已生效的搜索结果不丢', `rows=${rows(panel).length}`);
+searchBtnOf().props.onClick();
+panel = renderPanel();
+check(searchInputOf()?.props.value === '草稿ABC', 'K 没执行的输入在收起后保留', JSON.stringify(searchInputOf()?.props.value));
+keyHandlers[keyHandlers.length - 1]({ key: 'Escape', preventDefault() {} });
+panel = renderPanel();
+check(!searchOpenNow() && rows(panel).length === 2, 'K Esc 只收起输入框，结果不丢', `rows=${rows(panel).length}`);
+
+// 清除：清空生效词并回到我的工作（输入框也一起清掉、收起）。
+searchBtnOf().props.onClick();
+panel = renderPanel();
 searchClearOf().props.onClick();
 await settle();
 panel = renderPanel();
 check(!lastCommand().includes('--search='), 'K 清除后回到我的工作列表（不再带 --search=）', lastCommand());
 check(rows(panel).length === FIXTURE.items.length, 'K 清除后行数回到我的工作列表', `${rows(panel).length} vs ${FIXTURE.items.length}`);
-// 清除只清词，输入行仍开着；Esc 收输入行，列表（已经回到我的工作）不动。
-check(Boolean(searchInputOf()), 'K 清除后搜索行仍开着', `input=${Boolean(searchInputOf())}`);
+check(!searchOpenNow() && !searchInputOf(), 'K 清除后收起按钮、输入框清空', `open=${searchOpenNow()} input=${Boolean(searchInputOf())}`);
+
+// 执行过搜索再展开：输入框不会把生效词回填（「执行搜索了清空输入框」）。
+searchBtnOf().props.onClick();
+panel = renderPanel();
+check(searchInputOf()?.props.value === '', 'K 执行搜索后再次展开仍是空输入框', JSON.stringify(searchInputOf()?.props.value));
 keyHandlers[keyHandlers.length - 1]({ key: 'Escape', preventDefault() {} });
 panel = renderPanel();
-check(!searchInputOf() && rows(panel).length === FIXTURE.items.length, 'K Esc 只收起搜索行，结果不丢', `rows=${rows(panel).length}`);
 
 /* ---------------- F：兜底（基座模块表里没有 @tanstack/react-virtual） ----------------
    client 在 factory 里 try/catch 地 require 它；这里再开一个模块实例、这次的 require 口故意不给它，

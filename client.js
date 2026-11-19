@@ -1085,34 +1085,40 @@ window.__ModuleLoader__.load({
   color:var(--dsw-alias-label-secondary,#5c6270);background:transparent;border:0;border-radius:var(--dsw-radius-sm,8px);cursor:pointer}
 .jmw-iconbtn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06));color:var(--dsw-alias-label-primary,#1b1d22)}
 .jmw-iconbtn:disabled{opacity:.4;cursor:default}
-/* 搜索：放大镜按钮（生效中 / 展开时上色）+ 标题下的输入行。输入框只有按回车才发查询。
-   输入行是半透明毛玻璃：底色 / 模糊直接借用 DSH 菜单那一套 token
-   （--dsw-menu-surface-fill / --dsw-menu-backdrop-filter），浅色深色自动跟着主题走；
-   聚焦时只加蓝色描边 + 2px 光晕，失焦回到纯毛玻璃。只用在小输入框上——整窗遮罩仍然禁止
-   backdrop-filter（0.13.3「滚动整屏闪」的成因，见 .jmw-mask 上面那条注释）。
-   图标画在框内左侧，不再挂在框外。 */
+/* 搜索：放大镜平时就在标题栏原位；点开后同一位置向左展开毛玻璃输入框，失焦 / 再点收回按钮。
+   展开与收起靠 .jmw-searchexpand / .jmw-searchbox 的 width 过渡（右边缘固定，所以向左长出来、
+   向右收回去），图标画在框内左侧。输入框只有回车才发查询。
+   毛玻璃借用 DSH 菜单 token（--dsw-menu-surface-fill / --dsw-menu-backdrop-filter），深浅主题
+   自动适配；只用在这个小输入框上——整窗遮罩仍然禁止 backdrop-filter
+   （0.13.3「滚动整屏闪」的成因，见 .jmw-mask 上面那条注释）。 */
+.jmw-searchexpand{position:relative;flex:none;width:28px;height:28px;
+  transition:width .24s cubic-bezier(.22,.61,.36,1)}
+.jmw-searchexpand.open{width:min(260px,46vw)}
+.jmw-searchbtn{position:absolute;right:0;top:0;z-index:1;
+  transition:opacity .14s ease,background-color .14s ease,color .14s ease}
+.jmw-searchexpand.open .jmw-searchbtn{opacity:0;pointer-events:none}
 .jmw-searchbtn.on{color:#4d6bfe;background:rgba(77,107,254,.12)}
 .jmw-searchbtn.set{color:#4d6bfe}
-.jmw-search{display:flex;align-items:center;padding:0 18px 10px}
-.jmw-searchbox{position:relative;display:flex;align-items:center;flex:1;min-width:0;height:32px;
-  border-radius:999px;
+.jmw-searchbox{position:absolute;right:0;top:0;z-index:2;width:28px;height:28px;overflow:hidden;opacity:0;
+  display:flex;align-items:center;min-width:0;border-radius:999px;
   border:1px solid rgba(128,138,158,.22);
   border-color:color-mix(in srgb,var(--dsw-alias-label-primary,#1b1d22) 13%,transparent);
   background:var(--dsw-menu-surface-fill,rgba(128,138,158,.10));
   -webkit-backdrop-filter:var(--dsw-menu-backdrop-filter,blur(10px));
   backdrop-filter:var(--dsw-menu-backdrop-filter,blur(10px));
   box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 1px 2px rgba(18,24,38,.05);
-  transition:border-color .18s ease,box-shadow .18s ease}
+  transition:width .24s cubic-bezier(.22,.61,.36,1),opacity .16s ease,border-color .18s ease,box-shadow .18s ease}
+.jmw-searchexpand.open .jmw-searchbox{width:100%;opacity:1}
 .jmw-searchbox:focus-within{border-color:#4d6bfe;
   box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 0 0 2px rgba(77,107,254,.18)}
-.jmw-searchicon{position:absolute;left:11px;top:50%;transform:translateY(-50%);pointer-events:none;
+.jmw-searchicon{position:absolute;left:9px;top:50%;transform:translateY(-50%);pointer-events:none;
   color:var(--dsw-alias-label-tertiary,#8a8f99)}
-.jmw-searchinput{flex:1;min-width:0;height:100%;padding:0 8px 0 34px;font:inherit;font-size:12.5px;
+.jmw-searchinput{flex:1;min-width:0;height:100%;padding:0 6px 0 30px;font:inherit;font-size:12.5px;
   color:var(--dsw-alias-label-primary,#1b1d22);background:transparent;border:0;border-radius:inherit;outline:none;
   appearance:none;-webkit-appearance:none}
 .jmw-searchinput::-webkit-search-cancel-button{display:none}
 .jmw-searchinput::placeholder{color:var(--dsw-alias-label-tertiary,#8a8f99)}
-.jmw-searchclear{flex:none;width:24px;height:24px;margin-right:4px;padding:0;font:inherit;font-size:15px;line-height:1;cursor:pointer;
+.jmw-searchclear{flex:none;width:22px;height:22px;margin-right:3px;padding:0;font:inherit;font-size:15px;line-height:1;cursor:pointer;
   border:0;border-radius:999px;color:var(--dsw-alias-label-tertiary,#8a8f99);background:transparent}
 .jmw-searchclear:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06));color:var(--dsw-alias-label-primary,#1b1d22)}
 /* 状态筛选按钮（tab 行右侧）。
@@ -1670,6 +1676,7 @@ window.__ModuleLoader__.load({
       const credRef = React.useRef(null);
       const stripRef = React.useRef(null);
       const searchRef = React.useRef(null);
+      const searchWrapRef = React.useRef(null);
       // 真正的滚动容器（.jmw-body）：虚拟列表必须挂在它上面。
       const bodyRef = React.useRef(null);
       // 令牌用独立弹窗展示（标题右侧的「配置」按钮开关）。
@@ -1678,34 +1685,42 @@ window.__ModuleLoader__.load({
       const credOpen = state.credOpen === true;
       const setCredOpen = (value) => patch({ credOpen: typeof value === 'function' ? value(credOpen) : value });
       // 关面板 = 连所有浮层一起关：否则下次点开入口会「列表 + 配置」两个弹窗叠着出现。
-      // 搜索行不算浮层（它是列表的一部分，和项目 tab / 状态筛选一样跨开关保留），所以不在这里收。
+      // 搜索框不算浮层（它在标题栏里，和项目 tab / 状态筛选一样跨开关保留），所以不在这里收。
       const closeAll = () => patch({ open: false, credOpen: false, menuKey: '', filterOpen: false });
 
-      // 搜索：标题右侧的放大镜展开输入行。草稿（searchDraft）与已生效的搜索词（searchText）
-      // 分开，回车才切词；搜索结果和「我的工作」共用同一套 sprint 分组 / 项目 tab / 状态筛选。
+      // 搜索：放大镜就在标题栏原位，点开后在同一个位置向左展开输入框、失焦收回按钮。
+      // 草稿（searchDraft）与已生效的搜索词（searchText）分开：回车才切词并清空输入框；
+      // 只打字不回车时草稿留着，收起再展开能接着改。结果与「我的工作」共用同一套
+      // sprint 分组 / 项目 tab / 状态筛选。
       const searchOpen = state.searchOpen === true;
       const searchText = typeof state.searchText === 'string' ? state.searchText : '';
       const searchDraft = typeof state.searchDraft === 'string' ? state.searchDraft : '';
       const openSearch = () => patch({
         searchOpen: true,
-        // 展开时把已经生效的词放回输入框，方便改写或看清搜的是什么。
-        searchDraft: searchText,
+        // 不覆盖草稿：上次没回车的内容要原样留着；已生效的词在副标题里能看到。
         filterOpen: false,
         menuKey: '',
       });
       const submitSearch = () => {
         const next = searchDraft.trim();
         // 搜索是整站范围：先把项目 tab 归到「全部」，否则旧 tab 可能把所有结果都过滤掉。
-        patch({ searchText: next, project: next ? 'ALL' : snapshot.project, menuKey: '', filterOpen: false });
+        // 已执行搜索 → 清空输入框（结果靠副标题里的「搜索：…」提示），避免和生效词混淆。
+        patch({ searchText: next, searchDraft: '', project: next ? 'ALL' : snapshot.project, menuKey: '', filterOpen: false });
         // patch 直接改共享 snapshot，load 里现读 searchText，所以这里不用等重渲染。
         load(snapshot.scope);
       };
+      // 失焦收起：relatedTarget 还在框内（比如点清除按钮）就不收。
+      const onSearchBlur = (event) => {
+        const next = event?.relatedTarget;
+        if (next && searchWrapRef.current?.contains?.(next)) return;
+        patch({ searchOpen: false });
+      };
       const clearSearch = () => {
-        patch({ searchText: '', searchDraft: '' });
+        patch({ searchText: '', searchDraft: '', searchOpen: false });
         load(snapshot.scope);
       };
 
-      // 展开搜索行时把焦点放进输入框（并选中旧词，直接输入即可替换）。
+      // 展开时把焦点放进输入框；草稿会保留，所以直接全选便于改写。
       React.useEffect(() => {
         if (!searchOpen) return;
         const input = searchRef.current;
@@ -1719,8 +1734,8 @@ window.__ModuleLoader__.load({
           if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing
             || event.keyCode === 229 || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey || event.repeat) return;
           event.preventDefault?.();
-          // Esc 的顺序：令牌弹窗 → 状态下拉 → 筛选菜单 → 搜索行 → 面板。
-          // 搜索行收起时保留已生效的搜索词（结果还在列表里），点放大镜能再展开看/改。
+          // Esc 的顺序：令牌弹窗 → 状态下拉 → 筛选菜单 → 搜索框 → 面板。
+          // 搜索框收起时草稿与已生效的搜索词都留着（结果还在列表里），再点放大镜接着用。
           if (credOpen) {
             setCredOpen(false);
             return;
@@ -1957,15 +1972,54 @@ window.__ModuleLoader__.load({
             h('div', { key: 'title', className: 'jmw-title' }, t('title')),
             subtitle ? h('div', { key: 'sub', className: 'jmw-sub' }, subtitle) : null,
           ]),
-          h('button', {
+          // 搜索：按钮与展开后的输入框是同一个容器（同一位置），靠宽度过渡向左长出来。
+          h('div', {
             key: 'search',
-            type: 'button',
-            className: `jmw-iconbtn jmw-searchbtn${searchOpen ? ' on' : ''}${searchText ? ' set' : ''}`,
-            title: searchText ? t('searchResultPrefix', { query: searchText }) : t('searchOpen'),
-            'aria-label': t('searchOpen'),
-            'aria-expanded': searchOpen ? 'true' : 'false',
-            onClick: () => (searchOpen ? patch({ searchOpen: false }) : openSearch()),
-          }, h(SearchGlyph)),
+            className: `jmw-searchexpand${searchOpen ? ' open' : ''}`,
+            ref: searchWrapRef,
+            onBlur: onSearchBlur,
+          }, [
+            h('div', { key: 'box', className: 'jmw-searchbox' }, [
+              h(SearchGlyph, { key: 'icon', className: 'jmw-searchicon' }),
+              searchOpen ? h('input', {
+                key: 'input',
+                ref: searchRef,
+                type: 'search',
+                className: 'jmw-searchinput',
+                value: searchDraft,
+                placeholder: t('searchPlaceholder'),
+                title: t('searchHint'),
+                'aria-label': t('searchOpen'),
+                onChange: (event) => patch({ searchDraft: event?.target?.value ?? '' }),
+                onKeyDown: (event) => {
+                  if (event?.key === 'Enter' && !event.isComposing) {
+                    event.preventDefault?.();
+                    submitSearch();
+                  }
+                },
+              }) : null,
+              searchOpen && (searchText || searchDraft)
+                ? h('button', {
+                  key: 'clear',
+                  type: 'button',
+                  className: 'jmw-searchclear',
+                  title: t('searchClear'),
+                  'aria-label': t('searchClear'),
+                  onClick: clearSearch,
+                }, '×')
+                : null,
+            ]),
+            h('button', {
+              key: 'btn',
+              type: 'button',
+              className: `jmw-iconbtn jmw-searchbtn${searchOpen ? ' on' : ''}${searchText ? ' set' : ''}`,
+              title: searchText ? t('searchResultPrefix', { query: searchText }) : t('searchOpen'),
+              'aria-label': t('searchOpen'),
+              'aria-expanded': searchOpen ? 'true' : 'false',
+              tabIndex: searchOpen ? -1 : 0,
+              onClick: () => (searchOpen ? patch({ searchOpen: false }) : openSearch()),
+            }, h(SearchGlyph)),
+          ]),
           h('button', {
             key: 'cred',
             type: 'button',
@@ -1994,42 +2048,6 @@ window.__ModuleLoader__.load({
             onClick: () => closeAll(),
           }, h(CloseGlyph)),
         ]),
-        // 搜索行（放大镜展开）：输入 → 回车搜整站（Jira 的 text 全文搜索 / issue key 直达），
-        // 空值回车退回「我的工作」。输入框用受控值，草稿改完不自动查询，避免每敲一个字打一次 Jira。
-        searchOpen
-          ? h('div', { key: 'search', className: 'jmw-search' }, [
-            h('div', { key: 'box', className: 'jmw-searchbox' }, [
-              h(SearchGlyph, { key: 'icon', className: 'jmw-searchicon' }),
-              h('input', {
-                key: 'input',
-                ref: searchRef,
-                type: 'search',
-                className: 'jmw-searchinput',
-                value: searchDraft,
-                placeholder: t('searchPlaceholder'),
-                title: t('searchHint'),
-                'aria-label': t('searchOpen'),
-                onChange: (event) => patch({ searchDraft: event?.target?.value ?? '' }),
-                onKeyDown: (event) => {
-                  if (event?.key === 'Enter' && !event.isComposing) {
-                    event.preventDefault?.();
-                    submitSearch();
-                  }
-                },
-              }),
-              searchText
-                ? h('button', {
-                  key: 'clear',
-                  type: 'button',
-                  className: 'jmw-searchclear',
-                  title: t('searchClear'),
-                  'aria-label': t('searchClear'),
-                  onClick: clearSearch,
-                }, '×')
-                : null,
-            ]),
-          ])
-          : null,
         // tab 行：项目 tab（左滚 / 条 / 右滚）+ 状态筛选 + 展开全部 / 折叠全部。
         // 范围分段控件（未完成 / 全部）与它右侧的总数已删（用户 2026-11-18）：范围固定为 all，
         // 总数移到标题下的副标题，「展开 / 折叠全部」从原来的第二行挪到这里。

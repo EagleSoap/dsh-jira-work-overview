@@ -81,7 +81,7 @@ Prefer files? Add an override row to your profile's `cordis.patch.yml` (this is 
 ### Panel
 
 - **Project tabs** (with `‹ ›` scrolling) filter by issue-key prefix; **status filter** is single-select, defaults to "all statuses".
-- **Search**: click the magnifier, type a keyword or an issue key, press **Enter**. The query runs against all of Jira (not only your issues); matching issues are grouped by sprint like your own list, with their project tabs / status filter / total. Clicking `×` clears the search and returns to your work; **Esc** only closes the input row (results stay).
+- **Search**: the header magnifier expands in place into a field that slides out to the left; type a keyword or an issue key and press **Enter**. The query runs against all of Jira (not only your issues); matches are grouped by sprint like your own list, with the same project tabs / status filter / total. Losing focus (or **Esc**) collapses the field back to the button and keeps an unsubmitted draft; a submitted query clears the field and keeps the results, and `×` clears the search to return to your work.
 - The header shows the **accurate total** for the current project + status, straight from Jira's `approximate-count`.
 - Click a **status chip** on any row to move the issue; the list reloads. **Esc** closes the top-most layer (status menu → configure dialog → panel).
 - The list is **virtualized**: thousands of rows scroll smoothly because only the visible ones are in the DOM.
