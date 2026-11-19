@@ -6,7 +6,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
-改状态变轻了（不再为一行变化重拉整个列表），也不会再被自己的操作通知一次。
+## [0.15.0] - 2026-11-19
+
+改状态变轻了（不再为一行变化重拉整个列表），也不会再被自己的操作通知一次；面板的失败提示按类型说话。
 
 ### Added
 
