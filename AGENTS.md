@@ -80,7 +80,13 @@ contains one — every fixture token and host is fake (`ATATT3xFfGF0…`, `examp
 
 ## Release checklist
 
-1. Bump `package.json.version`, add the `CHANGELOG.md` entry, `git add -A && git commit`.
+**Releases are requested, not automatic.** Day-to-day work is committed and pushed; a version bump, the
+`CHANGELOG.md` entry, the tag and the GitHub Release happen only when the maintainer asks for a release —
+one iteration may collect several changes that ship as a single version. When that go-ahead comes:
+
+1. Bump `package.json.version`, add the `CHANGELOG.md` entry, `git add -A && git commit` (if the release
+   bundles work already on `main`, fold the `[Unreleased]` notes into the new version section so the
+   release notes match the tag's content).
 2. `git push origin main`.
 3. `gh release create vX.Y.Z --target main --title "vX.Y.Z — …" --notes-file notes.md` (notes: what it does,
    what changed, the copy-paste install spec, requirements, link to the changelog). For a release that is
