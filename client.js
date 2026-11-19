@@ -1100,7 +1100,7 @@ window.__ModuleLoader__.load({
 .jmw-searchbtn.on{color:#4d6bfe;background:rgba(77,107,254,.12)}
 .jmw-searchbtn.set{color:#4d6bfe}
 .jmw-searchbox{position:absolute;right:0;top:0;z-index:2;width:28px;height:28px;overflow:hidden;opacity:0;
-  display:flex;align-items:center;min-width:0;border-radius:999px;
+  pointer-events:none;display:flex;align-items:center;min-width:0;border-radius:999px;
   border:1px solid rgba(128,138,158,.22);
   border-color:color-mix(in srgb,var(--dsw-alias-label-primary,#1b1d22) 13%,transparent);
   background:var(--dsw-menu-surface-fill,rgba(128,138,158,.10));
@@ -1108,7 +1108,7 @@ window.__ModuleLoader__.load({
   backdrop-filter:var(--dsw-menu-backdrop-filter,blur(10px));
   box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 1px 2px rgba(18,24,38,.05);
   transition:width .24s cubic-bezier(.22,.61,.36,1),opacity .16s ease,border-color .18s ease,box-shadow .18s ease}
-.jmw-searchexpand.open .jmw-searchbox{width:100%;opacity:1}
+.jmw-searchexpand.open .jmw-searchbox{width:100%;opacity:1;pointer-events:auto}
 .jmw-searchbox:focus-within{border-color:#4d6bfe;
   box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 0 0 2px rgba(77,107,254,.18)}
 .jmw-searchicon{position:absolute;left:9px;top:50%;transform:translateY(-50%);pointer-events:none;

@@ -965,6 +965,13 @@ check(
   && /\.jmw-searchbox\{[^}]*transition:width/.test(css),
   'K 展开 / 收起有宽度过渡（向左展开、收回按钮）',
 );
+// 收起的输入框盖在按钮上（z-index 更高），必须 pointer-events:none，否则点击被它吃掉、
+// 放大镜像「点不动」——真机上就是这么坏的，mini DOM 拦不住，所以在这里钉 CSS。
+check(
+  /\.jmw-searchbox\{[^}]*pointer-events:none/.test(css)
+  && /\.jmw-searchexpand\.open \.jmw-searchbox\{[^}]*pointer-events:auto/.test(css),
+  'K 收起的输入框不吃点击（按钮可点），展开后才接管',
+);
 
 searchBtnOf().props.onClick();
 panel = renderPanel();
