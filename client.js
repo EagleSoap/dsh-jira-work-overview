@@ -1332,11 +1332,15 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 优先级分级。只给 High / Highest 整行上底色，Highest 的对比度明显更强；
-     * 其它（Medium / Low）不上色，靠徽标显示名字就够了。
+     * 优先级分级。名次由 host 给（priorityRank = GET /rest/api/3/priority 的数组下标，0 = Jira 里的最高级），
+     * 所以站点调了顺序、或用 P0 / Blocker 这类自定义名字，界面都跟着走，不再把 "Highest" 写死成最高级。
+     * 仍只给最高的两级上底色（0 红、1 琥珀），再低的不上色——只靠徽标显示名字就够了。
+     * 名次拿不到（旧载荷 / 站点没给这个接口 / 离线）才退回按名字判断。
      */
-    function priorityLevel(priority) {
-      const name = String(priority ?? '').trim().toLowerCase();
+    function priorityLevel(item) {
+      const rank = Number.isInteger(item?.priorityRank) ? item.priorityRank : null;
+      if (rank !== null) return rank === 0 ? 'highest' : (rank === 1 ? 'high' : '');
+      const name = String(item?.priority ?? '').trim().toLowerCase();
       if (name === 'highest' || name === 'highest priority' || name === '最高' || name === '最高级') return 'highest';
       if (name === 'high' || name === '高') return 'high';
       return '';
@@ -1345,7 +1349,7 @@ window.__ModuleLoader__.load({
     function renderRow(item) {
       const title = `${item.summary || t('untitled')}${item.parent ? ` · ${t('parent', { key: item.parent })}` : ''}`;
       const open = snapshot.menuKey === item.key;
-      const level = priorityLevel(item.priority);
+      const level = priorityLevel(item);
       const meta = [];
       if (item.status) {
         // 状态徽标本身就是下拉入口（行本身是链接，所以这里 stopPropagation 防止误跳转）。

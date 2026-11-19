@@ -4,6 +4,22 @@ All notable changes to **dsh-jira-work-overview** are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The first 25 releases were built in a single day, so the dates are real but the cadence was not: each entry lists what changed, not how long it took.
 
+## [0.14.0] - 2026-11-19
+
+高亮不再写死「`Highest` 就是最高级」，改为挂到 Jira 自己给的优先级名次上。
+
+### Added
+
+- **面板高亮按 Jira 的优先级名次，而不是按名字。** 名次取自 `GET /rest/api/3/priority` 返回数组的**下标**（0 = 站点里的最高级）：名次 0 红底 / 名次 1 琥珀底 / 其余不上色（徽标照旧）。于是站点调换优先级顺序、或者用 `P0` / `Blocker` 这类自定义名字也照样正确。拿不到名次（旧载荷 / 站点没暴露这个接口）时退回原来的名字匹配（`Highest` / `High`），行为不变。
+- `--json` 的每个 item 新增 `priorityId`（Jira 的优先级 id，字符串）与 `priorityRank`（上面的名次，拿不到时 `null`）；单条 issue 的 `--json` 同样带上。文本输出不受影响。
+- `test/dsh-jira-visual.mjs` 新增 H 段：自定义名字（`Blocker` / `P0` / …）仍按名次上色、徽标配色只看名次、剥掉 `priorityRank` 时名字兜底仍生效。
+- `test/dsh-jira-i18n.mjs` 的 fetch 桩加了优先级清单，断言名次来自站点顺序、`priorityId` 原样带出。
+
+### Changed
+
+- 优先级清单**不带任何参数**地取一次就够：结果缓存 6 小时；失败（例如令牌没有权限）短退避 5 分钟，其间不再重试。**这个能力是可选的** —— 清单拿不到只是不上色，列表查询本身照常成功。
+- 没用 `priorityscheme` 系列接口：`GET /rest/api/3/priorityscheme/{id}` 实测返回 `405 Method 'GET' is not supported`，列表接口对普通用户回空表（要 Administer Jira 权限），所以「按 scheme 排序」这条路对普通令牌不可得；`GET /rest/api/3/priority` 只需要 "Permission to access Jira"，且实测其顺序与 JQL `ORDER BY priority ASC/DESC` 的结果一致。
+
 ## [0.13.4] - 2026-11-19
 
 去标识化版本：仓库转为公开之前，把属于作者本人 Jira 的值从代码、文档与 git 历史里全部拿掉。

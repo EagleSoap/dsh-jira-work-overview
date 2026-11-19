@@ -12,7 +12,8 @@ Show **your** Jira work items — with their real workflow status — inside [De
 
 ## What you get
 
-- **Left-sidebar panel** — one row per issue, grouped by sprint (collapsible, newest sprint first), with project tabs, a single-select **status filter**, an **accurate total** in the header, High/Highest rows highlighted by background colour, and a status dropdown to move an issue through its workflow.
+- **Rows are highlighted by Jira's own priority order** — the top two levels get a row background and a left bar (reddest = highest), read from `GET /rest/api/3/priority` rather than a hard-coded "Highest", so a site that reorders priorities or uses custom names (`P0`, `Blocker`) still gets it right. Everything below stays uncoloured. If the site does not expose that list, the panel falls back to matching the names `Highest` / `High`.
+- **Left-sidebar panel** — one row per issue, grouped by sprint (collapsible, newest sprint first), with project tabs, a single-select **status filter**, an **accurate total** in the header, priority highlighting (see above), and a status dropdown to move an issue through its workflow.
 - **Live watch** — the host polls "assigned to me and not done" in the background; new assignments / status changes show a **system notification**, an **unread badge** on the sidebar entry, and a "what changed" banner with *mark as read*. The panel refreshes itself when a change arrives.
 - **Three agent tools** — `jira_my_work`, `jira_issue`, `jira_transition` (preview by default, writes only with `apply: true`).
 - **One slash command** — `/jira [--json] [--limit=<n>|0] [--lang=<tag>] [open|sprint|all | <issue key> | <JQL>]`; it renders in the command surface, so it costs no model tokens.

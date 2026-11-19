@@ -42,7 +42,7 @@ const RECORD = {
     summary: SUMMARY,
     status: { name: STATUS, statusCategory: { key: 'indeterminate', name: '进行中' } },
     issuetype: { name: '故事' },
-    priority: { name: 'High' },
+    priority: { id: '2', name: 'High' },
     parent: { key: 'APP-1948', fields: { summary: PARENT } },
     labels: ['需求优化'],
     updated: '2026-11-18T11:02:00.000+0800',
@@ -83,6 +83,16 @@ Object.defineProperty(globalThis, 'fetch', {
     const target = String(url);
     if (target.includes('/rest/api/3/field')) {
       return json([{ id: 'customfield_10020', name: '冲刺', schema: { custom: 'com.pyxis.greenhopper.jira:gh-sprint' } }]);
+    }
+    // 站点优先级清单：数组顺序就是名次（0 = Jira 里的最高级），面板高亮据此上底色。
+    if (target.includes('/rest/api/3/priority')) {
+      return json([
+        { id: '1', name: 'Highest' },
+        { id: '2', name: 'High' },
+        { id: '3', name: 'Medium' },
+        { id: '4', name: 'Low' },
+        { id: '5', name: 'Lowest' },
+      ]);
     }
     if (target.includes('/rest/api/3/search/jql')) {
       if (paging.mode === 'natural') return json({ issues: [RECORD], isLast: true });
@@ -204,6 +214,9 @@ const zhJsonData = JSON.parse(await runCommand('--json --lang=zh'));
 const zhItem = zhJsonData.items?.[0] ?? {};
 check('zh：Jira 父需求 key 原样（JSON）', zhItem.parent === 'APP-1948', String(zhItem.parent));
 check('zh：Jira 标签原样（JSON）', (zhItem.labels ?? []).includes('需求优化'), JSON.stringify(zhItem.labels));
+// 高亮挂钩：名次来自站点优先级清单的下标（stub 里 High 排第二 → 1），不是客户端写死的 "Highest"。
+check('zh：优先级名次来自站点顺序（High 排第二 → 1）', zhItem.priorityRank === 1, `${zhItem.priority}/${zhItem.priorityId}/${zhItem.priorityRank}`);
+check('zh：优先级 id 原样带上', zhItem.priorityId === '2', String(zhItem.priorityId));
 
 /* ---- 2. Config language: en（同一份数据） ---- */
 host.apply(makeHostCtx(), host.Config({ ...baseConfig, language: 'en' }));

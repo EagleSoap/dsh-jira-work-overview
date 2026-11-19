@@ -17,6 +17,14 @@ import Schema from '@deepseek-ai/schemastery';
 const SEARCH_PATH = '/rest/api/3/search/jql';
 // 只回一个 count 的检索端点：用来拿「该查询的准确总数」（不是当前页条数）。
 const COUNT_PATH = '/rest/api/3/search/approximate-count';
+// 站点优先级清单：**返回数组的下标就是 Jira 自己的优先级名次（0 = 最高级）**，面板据此上底色。
+// 不用 priorityscheme 系列接口拿「每个项目自己的顺序」：它们要 Administer Jira 权限，
+// 本机实测普通用户 GET /rest/api/3/priorityscheme 与 /{id}/priorities 都回空表、/{id} 回 405。
+const PRIORITY_PATH = '/rest/api/3/priority';
+// 优先级顺序是站点级配置、很少改：成功后缓存 6 小时；失败短退避 5 分钟，
+// 免得一个可选能力在每次刷新时都多打一次注定失败的请求。
+const PRIORITY_TTL_MS = 6 * 60 * 60 * 1000;
+const PRIORITY_FAIL_TTL_MS = 5 * 60 * 1000;
 // 项目 tab 的计数一次最多统计这么多个项目，超过就整体不显示（避免打一堆 count 请求）。
 const MAX_COUNT_PROJECTS = 8;
 // 翻页安全上限：Jira 单页最多 100 条，50 页 × 100 = 5000 条 = 一次查询最多能拉多少。
@@ -697,7 +705,7 @@ async function runCommand(jira, raw, signal) {
     const fields = [...LIST_FIELDS, await resolveSprintField(jira, signal), 'description', 'created', 'components', 'comment'];
     const issue = await jira.get(`/rest/api/3/issue/${encodeURIComponent(key)}`, { fields: fields.join(',') }, signal);
     return json
-      ? JSON.stringify(buildIssueJson(issue, jira), null, 2)
+      ? JSON.stringify(buildIssueJson(issue, jira, await jira.priorityRanks(signal).catch(() => null)), null, 2)
       : renderIssue(issue, { settings: jira.settings, includeComments: true, commentLimit: 3 });
   }
 
@@ -707,13 +715,16 @@ async function runCommand(jira, raw, signal) {
   );
   // 状态筛选必须插在 ORDER BY 之前（withJqlClause 负责），否则真实站点直接 400。
   const filteredJql = applyStatus(jql, status);
+  // 面板高亮用的优先级名次跟搜索并行拿；拿不到就是 null，界面退回按名字判断，不拖慢也不影响这次查询。
+  const ranksPromise = json ? jira.priorityRanks(signal).catch(() => null) : Promise.resolve(null);
   const page = await searchIssues(jira, filteredJql, limit, signal);
+  const ranks = await ranksPromise;
   // 只有面板（--json）才多打这一次 count：命令行文本输出保持一次请求。
   const totals = json ? await workListCounts(jira, filteredJql, page.issues, signal) : undefined;
   // 文本输出刻意不再标注「活跃迭代」（用户 2026-11-18：这个 board 的 sprint 状态跟实际工作安排对不上，
   // 标出来会误导）；结构化输出里仍然保留这个字段，供界面或脚本自行取用。
   return json
-    ? JSON.stringify(buildWorkListJson(page.issues, filteredJql, scope, jira, await fetchActiveSprint(jira, signal), { limit, hasMore: page.hasMore, status }, totals), null, 2)
+    ? JSON.stringify(buildWorkListJson(page.issues, filteredJql, scope, jira, await fetchActiveSprint(jira, signal), { limit, hasMore: page.hasMore, status, ranks }, totals), null, 2)
     : renderWorkList(page.issues, filteredJql, scope, jira, page.hasMore ? page.limit : 0);
 }
 
@@ -867,6 +878,8 @@ function createJira(ctx, settings) {
     tokenSource: t('token.source.unread'),
     /** 启动期的一次性事件（例如明文 token 迁移），会在输出里提示。 */
     notes: [],
+    /** 优先级顺序缓存 `{ ranks: Map, expires: number }`；见 priorityRanks()。 */
+    priorityCache: null,
 
     /** 站点地址（必填，装完要在面板「配置」里填）。baseUrl 不是 volatile，读启动期快照即可。 */
     site() {
@@ -993,6 +1006,37 @@ function createJira(ctx, settings) {
         throw new Error(t('err.http', { status: response.status, statusText: response.statusText, path, detail: jiraErrorDetail(body, text) }));
       }
       return body;
+    },
+
+    /**
+     * 站点的优先级名次表：`id:<id>` / `name:<小写名字>` → 下标（0 = Jira 里的最高级）。
+     * 界面拿这个下标决定谁整行上底色，所以站点改了顺序、或用 P0/Blocker 这类自定义名字也跟着走，
+     * 不需要在客户端写死 "Highest" 是最高级。取不到就回空表，界面退回按名字判断。
+     * 缓存见 PRIORITY_TTL_MS；被主动取消（abort）不写缓存，免得把「取消」当成「站点没这个接口」。
+     */
+    async priorityRanks(signal) {
+      const now = Date.now();
+      if (this.priorityCache && now < this.priorityCache.expires) return this.priorityCache.ranks;
+      let ranks = new Map();
+      let ttl = PRIORITY_TTL_MS;
+      try {
+        const list = await this.get(PRIORITY_PATH, {}, signal);
+        if (Array.isArray(list)) {
+          const next = new Map();
+          list.forEach((entry, index) => {
+            const id = String(entry?.id ?? '').trim();
+            const name = String(entry?.name ?? '').trim().toLowerCase();
+            if (id) next.set(`id:${id}`, index);
+            if (name) next.set(`name:${name}`, index);
+          });
+          ranks = next;
+        }
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        ttl = PRIORITY_FAIL_TTL_MS;
+      }
+      this.priorityCache = { ranks, expires: now + ttl };
+      return ranks;
     },
   };
 
@@ -2680,8 +2724,9 @@ function countByStatus(issues) {
  */
 function buildWorkListJson(issues, jql, scope, jira, sprint, page, totals) {
   const counts = { new: 0, indeterminate: 0, done: 0 };
+  const ranks = page?.ranks ?? null;
   const items = issues.map((issue) => {
-    const item = buildItemJson(issue, jira);
+    const item = buildItemJson(issue, jira, ranks);
     if (Object.prototype.hasOwnProperty.call(counts, item.category)) counts[item.category] += 1;
     return item;
   });
@@ -2758,7 +2803,17 @@ function groupBySprint(items) {
     });
 }
 
-function buildItemJson(issue, jira) {
+/** 这个优先级在站点顺序里的名次（0 = 最高级）。先按 id 命中（站点改名不影响），再按小写名字命中；都没有就是 null。 */
+function priorityRankOf(priority, ranks) {
+  if (!ranks || !priority) return null;
+  const id = priority.id === undefined || priority.id === null ? '' : String(priority.id).trim();
+  if (id && ranks.has(`id:${id}`)) return ranks.get(`id:${id}`);
+  const name = String(priority.name ?? '').trim().toLowerCase();
+  if (name && ranks.has(`name:${name}`)) return ranks.get(`name:${name}`);
+  return null;
+}
+
+function buildItemJson(issue, jira, ranks) {
   const fields = issue?.fields ?? {};
   const key = issue?.key ?? '';
   const sprint = sprintOf(issue, jira.sprintField);
@@ -2770,6 +2825,10 @@ function buildItemJson(issue, jira) {
     category: fields.status?.statusCategory?.key ?? 'unknown',
     type: fields.issuetype?.name ?? '',
     priority: fields.priority?.name ?? '',
+    // 优先级 id 与名次：名次来自 GET /rest/api/3/priority 的数组下标（0 = 最高级），
+    // 面板据此上底色（见 client.js 的 priorityLevel）；拿不到名次就是 null，面板退回按名字判断。
+    priorityId: fields.priority?.id === undefined || fields.priority?.id === null ? '' : String(fields.priority.id),
+    priorityRank: priorityRankOf(fields.priority, ranks),
     parent: fields.parent?.key ?? '',
     due: typeof fields.duedate === 'string' ? fields.duedate.slice(0, 10) : '',
     overdue: Boolean(fields.duedate) && isOverdue(fields.duedate),
@@ -2784,14 +2843,14 @@ function buildItemJson(issue, jira) {
   };
 }
 
-function buildIssueJson(issue, jira) {
+function buildIssueJson(issue, jira, ranks) {
   const fields = issue?.fields ?? {};
   return {
     ok: true,
     source: 'dsh-jira-work-overview',
     generatedAt: new Date().toISOString(),
     item: {
-      ...buildItemJson(issue, jira),
+      ...buildItemJson(issue, jira, ranks),
       created: typeof fields.created === 'string' ? fields.created.slice(0, 10) : '',
       components: Array.isArray(fields.components) ? fields.components.map((c) => c?.name).filter(Boolean) : [],
       description: adfToText(fields.description).trim(),

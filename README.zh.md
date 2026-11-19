@@ -76,9 +76,12 @@ all    : assignee = currentUser() ORDER BY updated DESC
   不可信（Sprint 23–29 全报 `future`、日期还落在过去），标出来只会误导。
 - 默认折叠规则：**整组都已完成的组默认折叠**，还有未完成的组默认展开；**tab 行右侧**的「展开全部 / 折叠全部」
   一键切换，折叠状态按「范围 + 迭代」记住。
-- **高优先级用整行底色高亮，颜色对比度越强级别越高**：`Highest` = 红底（16% 红）+ 左侧红条，
-  `High` = 琥珀底（10% 琥珀）+ 左侧琥珀条，`Medium` / `Low` 不上色（只留徽标）。左侧竖条固定 3px，
+- **高优先级用整行底色高亮，颜色对比度越强级别越高**：级别**取自 Jira 自己的优先级名次**
+  （`GET /rest/api/3/priority` 返回数组的下标，0 = 站点里的最高级），所以站点调了顺序、或者用 `P0` /
+  `Blocker` 这类自定义名字也照样对——不是把 `Highest` 写死在客户端。名次 0 = 红底（16% 红）+ 左侧红条，
+  名次 1 = 琥珀底（10% 琥珀）+ 左侧琥珀条，再低的不上色（只留徽标）。左侧竖条固定 3px，
   所以不靠色觉也能分辨级别；已完成的行底色减半，免得跟还没做的抢注意力。
+  拿不到名次（旧载荷，或站点没暴露这个接口）才退回按名字判断 `Highest` / `High`。
 - 行：状态点（待办 / 进行中 / 已完成三色）+ 可点开的 issue key + 摘要 + 状态徽标 + 优先级徽标 + 到期
   （逾期标红；没有到期日就显示更新时间）。
 - **改状态**：点一行的状态徽标（`状态 ▾`）会在该行下面展开一串可选状态——**这不是随便写状态名，
@@ -400,6 +403,10 @@ ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-shot.mjs         # 重新生成 docs
   网络层失败会带上 `error.cause` 的真实原因，而不是只给一句 `fetch failed`。
 - 检索走新版 `GET /rest/api/3/search/jql`，按 `nextPageToken` / `isLast` 翻页（`--limit=0` 时一直翻到 `isLast`，安全上限 50 页 / 5000 条 / `timeoutMs`）。
 - 分组只看 `status.statusCategory.key`（`new` / `indeterminate` / `done`），因为 `statusCategory.name` 会跟随站点语言本地化。
+- 优先级名次走 `GET /rest/api/3/priority`：**返回数组的下标就是 Jira 的优先级名次（0 = 最高级）**，
+  面板据此上底色（`items[].priorityRank`，0 红 / 1 琥珀 / 其余不上色）。不用 `priorityscheme` 系列
+  ——`/priorityscheme/{id}` 实测 405、列表对普通用户回空表，要 Administer Jira 权限。结果缓存 6 小时，
+  失败（含拿不到权限）短退避 5 分钟，拿不到就不上色、退回按名字判断：**一个可选能力绝不拖垮列表本身**。
 - 迭代归属走 sprint 自定义字段：先用 `schema.custom = com.pyxis.greenhopper.jira:gh-sprint` 从 `/rest/api/3/field`
   找到字段 id（字段显示名是本地化的「冲刺」，所以不能按名字匹配），找不到才回退 `customfield_10020`；结果缓存。
   一个 issue 可能挂在多个 sprint 上（被搬过迭代），优先取 `state === 'active'` 的那个，否则取 id 最大的。

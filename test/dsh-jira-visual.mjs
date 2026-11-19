@@ -226,12 +226,16 @@ async function transitionFetch(url, init) {
 }
 
 
-const mkItem = (key, priority, sprint, status = 'Backlog', category = 'new') => ({
+/* 站点优先级名次（GET /rest/api/3/priority 的数组下标，0 = 最高级）——host 发下来的就是这个。
+   fixture 里带上它，走的就是「按 Jira 名次上底色」的主路径；H 段再单独验没有名次时的名字兜底。 */
+const PRIORITY_RANK = { highest: 0, high: 1, medium: 2, low: 3, lowest: 4 };
+const mkItem = (key, priority, sprint, status = 'Backlog', category = 'new', rank = PRIORITY_RANK[String(priority).toLowerCase()] ?? null) => ({
   key,
   summary: `${priority} 的活 · ${key}`,
   status,
   category,
   priority,
+  priorityRank: rank,
   parent: '',
   type: '故事',
   due: '',
@@ -459,6 +463,13 @@ function menuChips(tree) {
   return collect(tree, (row) => row.type === 'button' && String(row.props.className ?? '').startsWith('jmw-chip pick'));
 }
 
+/* 断言计数器提到最前面：优先级高亮（H 段）在后面几段之前就要用。 */
+let failed = 0;
+const check = (ok, label, detail) => {
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}${detail === undefined ? '' : ` | ${detail}`}`);
+  if (!ok) failed += 1;
+};
+
 const entry = renderEntry(true);
 collect(entry, (row) => row.type === 'button')[0].props.onClick();
 await settle();
@@ -482,6 +493,11 @@ for (const row of rowInfo) console.log('  ·', row.key, '→', row.level, row.ba
 const expected = ['APP-H1:highest', 'APP-H2:high', 'APP-H3:none', 'APP-H4:highest', 'APP-H5:none', 'APP-H6:high'];
 const actual = rowInfo.map((row) => `${row.key}:${row.level}`);
 console.log('\n优先级高亮符合预期:', JSON.stringify(actual) === JSON.stringify(expected), '|', actual.join(' '));
+check(
+  JSON.stringify(actual) === JSON.stringify(expected),
+  'H 名次驱动的高亮（0 红 / 1 琥珀 / 其余不上色）',
+  actual.join(' '),
+);
 console.log('组内顺序符合预期(30 → 29 → 无迭代):', heads.map((h) => text(h).trim().slice(0, 13)).join(' | '));
 console.log('迭代区间那一行（S29 已过期应提示）:', collect(panel, (row) => String(row.props.className ?? '') === 'jmw-meta-line').map((row) => text(row).replace(/\s+/g, ' ').trim()).join(' / '));
 const pillTexts = collect(panel, (row) => String(row.props.className ?? '').split(' ')[0] === 'jmw-pill').map((row) => text(row).trim());
@@ -595,12 +611,8 @@ console.log('状态徽标按钮数:', statusButtons(panel).length, '| 页脚:', 
    **下标**缓存。折叠 / 展开会让同一串下标换成完全不同的条目：折叠前 index 1 是任务行（约 32px），
    折叠后 index 1 变成第二个组头（约 64px）—— 按下标复用旧高度，组头就被压在一起，「日期和标题」
    错位（用户实际报的「折叠全部后样式错误」）。estimateSize 也必须按条目类型分开，否则滚动中每量到
-   一个组头整列就往下窜一截。这里把 client 交给 useVirtualizer 的选项抓下来，把这两件事钉死。 */
-let failed = 0;
-const check = (ok, label, detail) => {
-  console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}${detail === undefined ? '' : ` | ${detail}`}`);
-  if (!ok) failed += 1;
-};
+   一个组头整列就往下窜一截。这里把 client 交给 useVirtualizer 的选项抓下来，把这两件事钉死。
+   （`check` / `failed` 在文件前面声明，H 段与本段共用。） */
 
 /* 整屏遮罩不许再出现 backdrop-filter：整窗大小的 backdrop-filter 在 macOS + Electron 上滚动重绘时
    会让整屏闪一下（用户报的「滚动列表时屏幕闪烁」）。遮罩本身只压暗、不模糊。
@@ -677,6 +689,50 @@ check(
   `${virtualState.options.at(-1)?.count} vs ${expandedOptions?.count}`,
 );
 
+/* ---------------- H：高亮挂在 Jira 给的优先级名次上（2026-11-19） ----------------
+   host 把 GET /rest/api/3/priority 的数组下标当 priorityRank 发下来（0 = Jira 里的最高级），
+   client 上底色只看它。下面这份 fixture 的名字全都不叫 Highest/High（Blocker / P0 / P1 …）：
+   按名字判断一个都不该上色，按名次判断才拿得到 0 红、1 琥珀。 */
+const RENAMED = ['Blocker', 'P0', 'P1', 'P2', 'P3', 'P4'];
+const levelsOf = () => rows(panel).map((row) => {
+  const cls = String(row.props.className ?? '');
+  const keyNode = collect(row, (r) => String(r.props.className ?? '') === 'jmw-key')[0];
+  return `${keyNode ? text(keyNode).trim() : '?'}:${cls.includes('pri-highest') ? 'highest' : (cls.includes('pri-high') ? 'high' : 'none')}`;
+});
+const expectedLevels = ['APP-H1:highest', 'APP-H2:high', 'APP-H3:none', 'APP-H4:highest', 'APP-H5:none', 'APP-H6:high'];
+
+activeFixture.current = {
+  ...FIXTURE,
+  items: FIXTURE.items.map((item, index) => ({ ...item, priority: RENAMED[index], priorityRank: index })),
+};
+/* 面板只在首次挂载或显式操作时拉数据：用和 E 段一样的手法（状态筛选 → 全部状态）触发一次 load。 */
+await pickStatus('全部状态');
+const renamedLevels = levelsOf();
+check(
+  JSON.stringify(renamedLevels) === JSON.stringify(['APP-H1:highest', 'APP-H2:high', 'APP-H3:none', 'APP-H4:none', 'APP-H5:none', 'APP-H6:none']),
+  'H 自定义名字（Blocker / P0 / …）也按名次上色（名次 0 红、1 琥珀，其余不上色）',
+  renamedLevels.join(' '),
+);
+const renamedBadges = rows(panel).map((row) => collect(row, (r) => String(r.props.className ?? '').startsWith('jmw-badge pri'))
+  .map((b) => `${text(b).trim()}:${String(b.props.className).replace('jmw-badge pri', '').trim()}`).join(''));
+check(
+  renamedBadges[0] === 'Blocker:highest' && renamedBadges[1] === 'P0:high' && !renamedBadges[2],
+  'H 名次 0 的徽标用 highest 配色、名次 1 用 high（文案是 Jira 的原话）；名次 2 起不挂徽标',
+  `${renamedBadges[0]} / ${renamedBadges[1]} / ${renamedBadges[2] || '无'}`,
+);
+
+/* 没有名次（旧载荷 / 站点给不出这个接口）仍然按名字兜底，不能因为改挂钩就丢掉老行为。 */
+activeFixture.current = { ...FIXTURE, items: FIXTURE.items.map(({ priorityRank, ...rest }) => rest) };
+await pickStatus('全部状态');
+const fallbackLevels = levelsOf();
+check(
+  JSON.stringify(fallbackLevels) === JSON.stringify(expectedLevels),
+  'H 载荷里没有 priorityRank 时退回按名字判断（Highest / High 照旧高亮）',
+  fallbackLevels.join(' '),
+);
+activeFixture.current = FIXTURE;
+await pickStatus('全部状态');
+
 /* ---------------- F：兜底（基座模块表里没有 @tanstack/react-virtual） ----------------
    client 在 factory 里 try/catch 地 require 它；这里再开一个模块实例、这次的 require 口故意不给它，
    验证：不崩、退回「直接渲染全部行」、并 console.warn 一次。 */
@@ -713,6 +769,6 @@ console.log('\nF 兜底（拿不到 @tanstack/react-virtual）：warn 次数 =',
   '| 占位高 =', collect(fbTree, (row) => String(row.props?.className ?? '') === 'jmw-vlist')[0]?.props?.style?.height);
 
 for (const off of effects) { try { off?.(); } catch { /* ignore */ } }
-console.log(failed === 0 ? '\n=== visual G 段（条目身份 / 估算）：全部通过 ===' : `\n=== visual G 段（条目身份 / 估算）：${failed} 项失败 ===`);
+console.log(failed === 0 ? '\n=== visual G/H 段（条目身份 / 估算 / 优先级名次）：全部通过 ===' : `\n=== visual G/H 段（条目身份 / 估算 / 优先级名次）：${failed} 项失败 ===`);
 console.log('done');
 process.exit(failed === 0 ? 0 : 1);
