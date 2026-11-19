@@ -1085,17 +1085,34 @@ window.__ModuleLoader__.load({
   color:var(--dsw-alias-label-secondary,#5c6270);background:transparent;border:0;border-radius:var(--dsw-radius-sm,8px);cursor:pointer}
 .jmw-iconbtn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06));color:var(--dsw-alias-label-primary,#1b1d22)}
 .jmw-iconbtn:disabled{opacity:.4;cursor:default}
-/* 搜索：放大镜按钮（生效中 / 展开时上色）+ 标题下的输入行。输入框只有按回车才发查询。 */
+/* 搜索：放大镜按钮（生效中 / 展开时上色）+ 标题下的输入行。输入框只有按回车才发查询。
+   输入行是半透明毛玻璃：底色 / 模糊直接借用 DSH 菜单那一套 token
+   （--dsw-menu-surface-fill / --dsw-menu-backdrop-filter），浅色深色自动跟着主题走；
+   聚焦时只加蓝色描边 + 2px 光晕，失焦回到纯毛玻璃。只用在小输入框上——整窗遮罩仍然禁止
+   backdrop-filter（0.13.3「滚动整屏闪」的成因，见 .jmw-mask 上面那条注释）。
+   图标画在框内左侧，不再挂在框外。 */
 .jmw-searchbtn.on{color:#4d6bfe;background:rgba(77,107,254,.12)}
 .jmw-searchbtn.set{color:#4d6bfe}
-.jmw-search{display:flex;align-items:center;gap:8px;padding:0 18px 10px}
-.jmw-searchicon{flex:none;color:var(--dsw-alias-label-tertiary,#8a8f99)}
-.jmw-searchinput{flex:1;min-width:0;height:30px;padding:0 10px;font:inherit;font-size:12.5px;
-  color:var(--dsw-alias-label-primary,#1b1d22);background:var(--dsw-alias-bg-l1,#fff);
-  border:1px solid var(--dsw-alias-border-l2,rgba(38,49,72,.18));border-radius:var(--dsw-radius-sm,8px);outline:none}
-.jmw-searchinput:focus{border-color:#4d6bfe;box-shadow:0 0 0 2px rgba(77,107,254,.16)}
+.jmw-search{display:flex;align-items:center;padding:0 18px 10px}
+.jmw-searchbox{position:relative;display:flex;align-items:center;flex:1;min-width:0;height:32px;
+  border-radius:999px;
+  border:1px solid rgba(128,138,158,.22);
+  border-color:color-mix(in srgb,var(--dsw-alias-label-primary,#1b1d22) 13%,transparent);
+  background:var(--dsw-menu-surface-fill,rgba(128,138,158,.10));
+  -webkit-backdrop-filter:var(--dsw-menu-backdrop-filter,blur(10px));
+  backdrop-filter:var(--dsw-menu-backdrop-filter,blur(10px));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 1px 2px rgba(18,24,38,.05);
+  transition:border-color .18s ease,box-shadow .18s ease}
+.jmw-searchbox:focus-within{border-color:#4d6bfe;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 0 0 2px rgba(77,107,254,.18)}
+.jmw-searchicon{position:absolute;left:11px;top:50%;transform:translateY(-50%);pointer-events:none;
+  color:var(--dsw-alias-label-tertiary,#8a8f99)}
+.jmw-searchinput{flex:1;min-width:0;height:100%;padding:0 8px 0 34px;font:inherit;font-size:12.5px;
+  color:var(--dsw-alias-label-primary,#1b1d22);background:transparent;border:0;border-radius:inherit;outline:none;
+  appearance:none;-webkit-appearance:none}
+.jmw-searchinput::-webkit-search-cancel-button{display:none}
 .jmw-searchinput::placeholder{color:var(--dsw-alias-label-tertiary,#8a8f99)}
-.jmw-searchclear{flex:none;width:24px;height:24px;padding:0;font:inherit;font-size:15px;line-height:1;cursor:pointer;
+.jmw-searchclear{flex:none;width:24px;height:24px;margin-right:4px;padding:0;font:inherit;font-size:15px;line-height:1;cursor:pointer;
   border:0;border-radius:999px;color:var(--dsw-alias-label-tertiary,#8a8f99);background:transparent}
 .jmw-searchclear:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06));color:var(--dsw-alias-label-primary,#1b1d22)}
 /* 状态筛选按钮（tab 行右侧）。
@@ -1981,34 +1998,36 @@ window.__ModuleLoader__.load({
         // 空值回车退回「我的工作」。输入框用受控值，草稿改完不自动查询，避免每敲一个字打一次 Jira。
         searchOpen
           ? h('div', { key: 'search', className: 'jmw-search' }, [
-            h(SearchGlyph, { key: 'icon', className: 'jmw-searchicon' }),
-            h('input', {
-              key: 'input',
-              ref: searchRef,
-              type: 'search',
-              className: 'jmw-searchinput',
-              value: searchDraft,
-              placeholder: t('searchPlaceholder'),
-              title: t('searchHint'),
-              'aria-label': t('searchOpen'),
-              onChange: (event) => patch({ searchDraft: event?.target?.value ?? '' }),
-              onKeyDown: (event) => {
-                if (event?.key === 'Enter' && !event.isComposing) {
-                  event.preventDefault?.();
-                  submitSearch();
-                }
-              },
-            }),
-            searchText
-              ? h('button', {
-                key: 'clear',
-                type: 'button',
-                className: 'jmw-searchclear',
-                title: t('searchClear'),
-                'aria-label': t('searchClear'),
-                onClick: clearSearch,
-              }, '×')
-              : null,
+            h('div', { key: 'box', className: 'jmw-searchbox' }, [
+              h(SearchGlyph, { key: 'icon', className: 'jmw-searchicon' }),
+              h('input', {
+                key: 'input',
+                ref: searchRef,
+                type: 'search',
+                className: 'jmw-searchinput',
+                value: searchDraft,
+                placeholder: t('searchPlaceholder'),
+                title: t('searchHint'),
+                'aria-label': t('searchOpen'),
+                onChange: (event) => patch({ searchDraft: event?.target?.value ?? '' }),
+                onKeyDown: (event) => {
+                  if (event?.key === 'Enter' && !event.isComposing) {
+                    event.preventDefault?.();
+                    submitSearch();
+                  }
+                },
+              }),
+              searchText
+                ? h('button', {
+                  key: 'clear',
+                  type: 'button',
+                  className: 'jmw-searchclear',
+                  title: t('searchClear'),
+                  'aria-label': t('searchClear'),
+                  onClick: clearSearch,
+                }, '×')
+                : null,
+            ]),
           ])
           : null,
         // tab 行：项目 tab（左滚 / 条 / 右滚）+ 状态筛选 + 展开全部 / 折叠全部。

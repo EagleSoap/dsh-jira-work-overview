@@ -663,10 +663,15 @@ console.log('状态徽标按钮数:', statusButtons(panel).length, '| 页脚:', 
    注释里会提到这个词，所以先把 CSS 注释剥掉再查声明。 */
 const css = styleTags.map((tag) => tag.textContent ?? '').join('\n');
 const cssBody = css.replace(/\/\*[\s\S]*?\*\//g, '');
+// 模糊只能出现在搜索框上、而且只能用 DSH 菜单的 token；整屏遮罩依旧一律禁止
+//（整窗 backdrop-filter 在 macOS + Electron 滚动重绘时会让整屏闪 —— 0.13.3 的回归）。
+const blurDecls = cssBody.match(/backdrop-filter[^;}]*/g) ?? [];
 check(
-  !/backdrop-filter/.test(cssBody),
-  'G 整屏遮罩不再用 backdrop-filter（macOS 滚动整屏闪的直接成因）',
-  (cssBody.match(/backdrop-filter[^;}]*/g) ?? []).join(' / ') || '无',
+  blurDecls.length > 0
+  && blurDecls.every((decl) => decl.includes('var(--dsw-menu-backdrop-filter'))
+  && !/\.jmw-(?:mask|credmask)\{{[^}}]*backdrop-filter/.test(cssBody),
+  'G 只有搜索框用平台菜单的毛玻璃 token，两处整屏遮罩仍不带 blur',
+  blurDecls.join(' / ') || '无',
 );
 check(
   /\.jmw-mask\{[^}]*background:var\(--dsw-alias-bg-mask-1/.test(css) && /\.jmw-credmask\{[^}]*background:var\(--dsw-alias-bg-mask-1/.test(css),
@@ -944,6 +949,14 @@ check(Boolean(searchBtnOf()), 'K 标题栏有搜索按钮');
 searchBtnOf().props.onClick();
 panel = renderPanel();
 check(Boolean(searchInputOf()), 'K 点开后展开搜索输入行');
+// 输入行是一个毛玻璃框体，放大镜画在框内左侧、输入框与清除按钮也都在框内（不是图标挂框外）。
+const searchBoxOf = () => collect(panel, (row) => String(row.props.className ?? '') === 'jmw-searchbox')[0];
+const inSearchBox = (cls) => collect(searchBoxOf(), (row) => String(row.props.className ?? '').includes(cls)).length;
+check(
+  Boolean(searchBoxOf()) && inSearchBox('jmw-searchicon') === 1 && inSearchBox('jmw-searchinput') === 1,
+  'K 搜索图标与输入框在同一个框体内',
+  `box=${Boolean(searchBoxOf())} icon=${inSearchBox('jmw-searchicon')} input=${inSearchBox('jmw-searchinput')}`,
+);
 check(searchInputOf().props.value === '', 'K 首次展开输入框为空', JSON.stringify(searchInputOf().props.value));
 searchInputOf().props.onChange({ target: { value: '網上APP' } });
 panel = renderPanel();
@@ -956,7 +969,7 @@ check(/--search=網上APP$/.test(lastCommand()), 'K 回车后发 --search=（放
 check(JSON.stringify(rowKeys()) === JSON.stringify(['APP-S1', 'APP-S2']), 'K 搜索结果显示对应任务项', rowKeys().join(','));
 check(groupHeads(panel).some((head) => text(head).includes('APP Sprint 28')), 'K 搜索结果按迭代分组（显示对应迭代）', groupHeads(panel).map((head) => text(head).replace(/\s+/g, ' ').trim()).join(' | '));
 check(subtitleText().includes('搜索：網上APP'), 'K 副标题显示当前搜索词', subtitleText());
-check(Boolean(searchClearOf()), 'K 搜索中显示清除按钮');
+check(Boolean(searchClearOf()) && inSearchBox('jmw-searchclear') === 1, 'K 搜索中显示清除按钮（也在框内右侧）', `clear=${inSearchBox('jmw-searchclear')}`);
 searchClearOf().props.onClick();
 await settle();
 panel = renderPanel();
