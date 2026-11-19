@@ -957,7 +957,7 @@ check(
   collect(headerNodeOf(), (row) => String(row.props.className ?? '').includes('jmw-searchexpand')).length === 1,
   'K 搜索容器挂在标题栏里',
 );
-check(!searchOpenNow() && !searchInputOf(), 'K 默认收起：只看得到放大镜按钮');
+check(!searchOpenNow() && searchInputOf()?.props.tabIndex === -1, 'K 默认收起：只看得到放大镜按钮（输入框不可聚焦）');
 // 展开 / 收起必须是宽度过渡（右边缘固定 → 视觉上向左长出来、向右缩回按钮）。
 check(
   /\.jmw-searchexpand\{[^}]*transition:width/.test(css)
@@ -971,6 +971,13 @@ check(
   /\.jmw-searchbox\{[^}]*pointer-events:none/.test(css)
   && /\.jmw-searchexpand\.open \.jmw-searchbox\{[^}]*pointer-events:auto/.test(css),
   'K 收起的输入框不吃点击（按钮可点），展开后才接管',
+);
+// 收起时必须先缩宽、最后才淡出：原来 opacity 和 width 同时跑，160ms 就透明了，
+// 视觉上像「瞬间消失」。这里钉住收起态 opacity 有延迟、展开态无延迟。
+check(
+  /\.jmw-searchbox\{[^}]*transition:[^}]*opacity\s+\.1s\s+ease\s+\.16s/.test(css)
+  && /\.jmw-searchexpand\.open \.jmw-searchbox\{[^}]*opacity\s+\.08s\s+ease/.test(css),
+  'K 收起时先缩宽再淡出（不是瞬间消失）',
 );
 
 searchBtnOf().props.onClick();
@@ -1002,7 +1009,7 @@ searchInputOf().props.onChange({ target: { value: '草稿ABC' } });
 panel = renderPanel();
 searchWrapOf().props.onBlur({ relatedTarget: null });
 panel = renderPanel();
-check(!searchOpenNow() && !searchInputOf(), 'K 失焦后收起变回按钮', `open=${searchOpenNow()} input=${Boolean(searchInputOf())}`);
+check(!searchOpenNow() && searchInputOf()?.props.tabIndex === -1, 'K 失焦后收起变回按钮（输入框不可聚焦）', `open=${searchOpenNow()} tabIndex=${searchInputOf()?.props.tabIndex}`);
 check(rows(panel).length === 2, 'K 收起时已生效的搜索结果不丢', `rows=${rows(panel).length}`);
 searchBtnOf().props.onClick();
 panel = renderPanel();
@@ -1019,7 +1026,7 @@ await settle();
 panel = renderPanel();
 check(!lastCommand().includes('--search='), 'K 清除后回到我的工作列表（不再带 --search=）', lastCommand());
 check(rows(panel).length === FIXTURE.items.length, 'K 清除后行数回到我的工作列表', `${rows(panel).length} vs ${FIXTURE.items.length}`);
-check(!searchOpenNow() && !searchInputOf(), 'K 清除后收起按钮、输入框清空', `open=${searchOpenNow()} input=${Boolean(searchInputOf())}`);
+check(!searchOpenNow() && (searchInputOf()?.props.value ?? '') === '', 'K 清除后收起按钮、输入框清空', `open=${searchOpenNow()} value=${JSON.stringify(searchInputOf()?.props.value)}`);
 
 // 执行过搜索再展开：输入框不会把生效词回填（「执行搜索了清空输入框」）。
 searchBtnOf().props.onClick();

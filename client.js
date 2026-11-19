@@ -1092,7 +1092,7 @@ window.__ModuleLoader__.load({
    自动适配；只用在这个小输入框上——整窗遮罩仍然禁止 backdrop-filter
    （0.13.3「滚动整屏闪」的成因，见 .jmw-mask 上面那条注释）。 */
 .jmw-searchexpand{position:relative;flex:none;width:28px;height:28px;
-  transition:width .24s cubic-bezier(.22,.61,.36,1)}
+  transition:width .26s cubic-bezier(.22,.61,.36,1)}
 .jmw-searchexpand.open{width:min(260px,46vw)}
 .jmw-searchbtn{position:absolute;right:0;top:0;z-index:1;
   transition:opacity .14s ease,background-color .14s ease,color .14s ease}
@@ -1107,8 +1107,11 @@ window.__ModuleLoader__.load({
   -webkit-backdrop-filter:var(--dsw-menu-backdrop-filter,blur(10px));
   backdrop-filter:var(--dsw-menu-backdrop-filter,blur(10px));
   box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 1px 2px rgba(18,24,38,.05);
-  transition:width .24s cubic-bezier(.22,.61,.36,1),opacity .16s ease,border-color .18s ease,box-shadow .18s ease}
-.jmw-searchexpand.open .jmw-searchbox{width:100%;opacity:1;pointer-events:auto}
+  /* 收起时先缩宽、最后才淡出（延迟 .16s），否则 .16s 就透明了，看起来像「瞬间消失」；
+     展开时反过来，立刻显形。 */
+  transition:width .26s cubic-bezier(.22,.61,.36,1),opacity .1s ease .16s,border-color .18s ease,box-shadow .18s ease}
+.jmw-searchexpand.open .jmw-searchbox{width:100%;opacity:1;pointer-events:auto;
+  transition:width .26s cubic-bezier(.22,.61,.36,1),opacity .08s ease,border-color .18s ease,box-shadow .18s ease}
 .jmw-searchbox:focus-within{border-color:#4d6bfe;
   box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 0 0 2px rgba(77,107,254,.18)}
 .jmw-searchicon{position:absolute;left:9px;top:50%;transform:translateY(-50%);pointer-events:none;
@@ -1981,7 +1984,9 @@ window.__ModuleLoader__.load({
           }, [
             h('div', { key: 'box', className: 'jmw-searchbox' }, [
               h(SearchGlyph, { key: 'icon', className: 'jmw-searchicon' }),
-              searchOpen ? h('input', {
+              // 输入框常驻：收起动画期间字还在框里，看起来是「收缩回去」而不是「整块消失」；
+              // 收起时用 tabIndex / readOnly 关掉交互，宽度、透明度和指针都由外层 .open 控制。
+              h('input', {
                 key: 'input',
                 ref: searchRef,
                 type: 'search',
@@ -1990,14 +1995,19 @@ window.__ModuleLoader__.load({
                 placeholder: t('searchPlaceholder'),
                 title: t('searchHint'),
                 'aria-label': t('searchOpen'),
-                onChange: (event) => patch({ searchDraft: event?.target?.value ?? '' }),
+                tabIndex: searchOpen ? 0 : -1,
+                readOnly: !searchOpen,
+                onChange: (event) => {
+                  if (!searchOpen) return;
+                  patch({ searchDraft: event?.target?.value ?? '' });
+                },
                 onKeyDown: (event) => {
-                  if (event?.key === 'Enter' && !event.isComposing) {
+                  if (searchOpen && event?.key === 'Enter' && !event.isComposing) {
                     event.preventDefault?.();
                     submitSearch();
                   }
                 },
-              }) : null,
+              }),
               searchOpen && (searchText || searchDraft)
                 ? h('button', {
                   key: 'clear',

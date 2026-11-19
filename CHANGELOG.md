@@ -15,7 +15,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
   它属于哪个迭代；`×` 清空回到「我的工作」。没回车的草稿在收起后保留，执行搜索后输入框清空、结果保留。
   输入框是半透明毛玻璃
   （借用 DSH 菜单的 `--dsw-menu-surface-fill` / `--dsw-menu-backdrop-filter`，深浅色自动适配），
-  聚焦时蓝色描边 + 光晕，放大镜画在框内左侧。命令面同时支持
+  聚焦时蓝色描边 + 光晕，放大镜画在框内左侧。收起时先缩宽、最后才淡出，输入框常驻到动画结束，
+  所以看到的是「缩回按钮」而不是整块瞬间消失。命令面同时支持
   `/jira --search=<文本>`（搜索词可带空格，按 token 一直吃到下一个 `--` 开关）。
 - `test/dsh-jira-search.mjs`（离线，21 项断言：全文 / key / browse URL、JQL 转义、`--status` 组合、
   `approximate-count` 的 `AND project = …`、空搜索回落）与 `test/dsh-jira-visual.mjs` 新增 K 段
