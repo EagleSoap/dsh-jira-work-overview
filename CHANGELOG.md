@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-11-19
+
 ### Fixed
 
 - **四条 `/api` 路由在真宿主里根本没注册 —— 配置页「读取令牌状态失败：HTTP 404」的根因。** 插件在 `apply()`

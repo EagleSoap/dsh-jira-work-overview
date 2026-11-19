@@ -33,7 +33,7 @@ Show **your** Jira work items — with their real workflow status — inside [De
 DSH installs plugins from an **installation spec** — anything `pnpm add` accepts (registry package name, git URL, tarball, absolute path). Pick one:
 
 ```bash
-# 1) from the npm registry (published since 0.14.0; pin a version with @0.14.0)
+# 1) from the npm registry (published since 0.14.0; pin a version with @0.15.1)
 plugin_manager install_bundle(target="dsh-jira-work-overview")
 
 # 2) straight from GitHub (no npm publishing needed)
