@@ -96,8 +96,8 @@ one iteration may collect several changes that ship as a single version. When th
 ## Install spec (how users get it)
 
 ```bash
-plugin_manager install_bundle(target="github:<owner>/dsh-jira-work-overview")   # no npm release needed
-plugin_manager install_bundle(target="dsh-jira-work-overview")                  # after npm publish
+plugin_manager install_bundle(target="github:EagleSoap/dsh-jira-work-overview")  # no npm release needed
+plugin_manager install_bundle(target="dsh-jira-work-overview")                   # npm, published from 0.14.0
 ```
 
 The client half needs no build; DSH serves the declared `./client` file.

@@ -14,6 +14,25 @@
 | `jira_issue` | 读取单条 issue 的完整内容：核心字段、描述（ADF 转纯文本）、可选评论。参数：`key`（必填）、`comments`、`comment_limit`。 |
 | `jira_transition` | 读某个 issue **此刻可用的状态流转**（就是面板里那个下拉框），或改状态。参数：`key`（必填）、`to`（目标状态名或流转 id，省略则只列出来）、`apply`（**默认 false 只预览**，true 才真的写入）。 |
 
+## 安装
+
+DSH 用**安装 spec** 装插件 —— 凡是 `pnpm add` 能吃的写法都行（registry 包名、git 地址、tarball、绝对路径）。选一个：
+
+```bash
+# 1) 从 npm 装（0.14.0 起已发布；要钉版本就在后面写 @0.14.0）
+plugin_manager install_bundle(target="dsh-jira-work-overview")
+
+# 2) 直接从 GitHub 装（不需要 npm 发布）
+plugin_manager install_bundle(target="github:EagleSoap/dsh-jira-work-overview")
+
+# 3) 从本地 checkout 装
+plugin_manager install_bundle(target="/absolute/path/to/dsh-jira-work-overview")
+```
+
+也可以在界面里装：左侧图标栏 → **插件 / Plugins** → 安装，粘同一个 spec。
+
+安装会把 `dsh-jira-work-overview` 加进 profile 的 bundle 列表，并插入 `cordis.patch.yml` 里声明的那行插件。装完要**刷新页面**（Cmd/Ctrl+R），左侧栏才会出现入口。注意 `install_bundle` 返回 `application:"applied"` **不等于**激活成功，真正的判据是 `list_plugins` 里 `include:jira-work-overview` 的 `fiberPhase` 为 `active`（见下面「平台支持」一节的装机检查）。
+
 ## 斜杠命令
 
 人在命令面里可以直接用 `/jira`，结果渲染在命令面、不产生模型消息（同一个操作只实现一次，工具与命令共用下面的渲染）。

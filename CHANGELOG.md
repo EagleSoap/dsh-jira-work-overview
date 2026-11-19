@@ -8,6 +8,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 高亮不再写死「`Highest` 就是最高级」，改为挂到 Jira 自己给的优先级名次上。
 
+本版同时**首次发布到 npm**（公开包）：`plugin_manager install_bundle(target="dsh-jira-work-overview")`（也可以 `npm i dsh-jira-work-overview`）。三种安装方式（npm / GitHub 直装 / 本地路径）见 README。
+
 ### Added
 
 - **面板高亮按 Jira 的优先级名次，而不是按名字。** 名次取自 `GET /rest/api/3/priority` 返回数组的**下标**（0 = 站点里的最高级）：名次 0 红底 / 名次 1 琥珀底 / 其余不上色（徽标照旧）。于是站点调换优先级顺序、或者用 `P0` / `Blocker` 这类自定义名字也照样正确。拿不到名次（旧载荷 / 站点没暴露这个接口）时退回原来的名字匹配（`Highest` / `High`），行为不变。
