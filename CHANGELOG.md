@@ -8,6 +8,27 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Added
 
+- **从属关系视图：epic / 父任务，不靠画布。** 面板原先只有「项目 tab × sprint」一条线；现在每行额外带一行
+  `↳ epic APP-123 · 标题`（子任务没有 epic 时显示 `↳ 父任务 APP-123`），点一下跳到那条任务（在当前列表里
+  就滚过去并切到「全部项目」，不在就新窗口打开 Jira）。标题栏右侧的 **按迭代 / 按 epic** 开关把同一批数据
+  换一条线分组：按 Epic Link 归组，**横跨多个项目的组**在组头标「N 个项目」；两种视图共用同一套虚拟列表、
+  折叠状态与计数，切换不重拉、不丢滚动。没挂关联的行不占额外高度；站点没有 epic 字段时静默退到
+  「无 epic」一组（不报错、不弹提示）。
+  - Host：`resolveEpicField`（按 `schema.custom` 认 `gh-epic-link` / `gh-epic-label`，再按「名字含 epic 且
+    类型 any」兜底，实例缓存；`/rest/api/3/field` 失败就当没有）、`epicOf`（兼容 `{key,summary}` / 纯键串 /
+    只有 id 三种形状）、`groupByEpic`（组名优先用 epic 摘要，`gh-epic-link` 只给键串时退回键）；
+    `buildItemJson` 增 `parentKey` / `parentSummary` / `epicKey` / `epicSummary`（`parent` 保留兼容），
+    列表与单条 issue 查询都带上 epic 字段，载荷增 `epics`。
+  - **顺带修掉一个真站点的坑**：同一个站点可能同时有 `gh-epic-label`（恒空）和 `gh-epic-link`（带键串），
+    字段表里 label 排在前面；按数组顺序 `find` 会选中恒空的那个，epic 视图永远只有「无 epic」一组。
+    现在按 schema 的**优先级**找（link 优先），`test/dsh-jira-epic.mjs` 钉死这个顺序。
+  - Client：`groupMode` 快照、`buildGroups(data, project, mode)`、折叠键带维度前缀（两种视图的 `none` 组
+    不串折叠）、行内关联行、组头项目数徽标、分段控件；字典新增 `groupBySprint` / `groupByEpic` /
+    `epicNone` / `epicProjects` / `relParent` / `relEpic` / `relOpen`（zh + en）。
+  - 测试：新增 `test/dsh-jira-epic.mjs`（离线 21 项：字段解析优先级、三种字段形状、分组与跨项目计数）；
+    `test/dsh-jira-visual.mjs` 新增 L 段（分段控件、关联行、epic 优先、跨项目徽标、两种视图共用数据）；
+    `test/dsh-jira-json.mjs` 增 `epics` 载荷形状断言。
+
 - **面板搜索，行为对齐 Jira 自己的搜索框。** 标题右侧新增放大镜：点开后**在原位向左展开**输入框（宽度过渡），
   失焦或 Esc 收回按钮，回车搜 **整站**（不只指派给我的）——
   关键词走 Jira 的 `text ~ "…"`（摘要 / 描述 / 评论），输入 issue key 或粘贴 `/browse/APP-123` 链接则直接

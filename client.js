@@ -150,6 +150,14 @@ window.__ModuleLoader__.load({
         allDone: '{total} 项全部完成',
         totalItems: '共 {total} 项',
         noSprint: '无迭代',
+        // 分组维度（tab 行右侧的分段控件）与 epic 关联行
+        groupBySprint: '按迭代',
+        groupByEpic: '按 epic',
+        epicNone: '无 epic',
+        epicProjects: '{count} 个项目',
+        relParent: '父任务 {key}',
+        relEpic: 'epic {key}',
+        relOpen: '在 Jira 打开 {key}',
         range: '{start} → {end}',
         due: '到期 {date}',
         overdue: '逾期 {date}',
@@ -332,6 +340,14 @@ window.__ModuleLoader__.load({
         allDone: '{total} done',
         totalItems: '{total} items',
         noSprint: 'No sprint',
+        // Grouping dimension (segmented control at the right of the tab row) and the epic relation line
+        groupBySprint: 'By sprint',
+        groupByEpic: 'By epic',
+        epicNone: 'No epic',
+        epicProjects: '{count} projects',
+        relParent: 'parent {key}',
+        relEpic: 'epic {key}',
+        relOpen: 'Open {key} in Jira',
         range: '{start} → {end}',
         due: 'due {date}',
         overdue: 'overdue {date}',
@@ -564,6 +580,10 @@ window.__ModuleLoader__.load({
       autoPickedOnce: false,
       // 用户在工作区右键菜单点了「关联 Jira 项目…」之后，正在等用户挑项目的那个工作区 id（空 = 不在挑）。
       linkTarget: '',
+      // 分组维度：'sprint'（默认，按迭代）| 'epic'（按 epic 从属关系）。
+      // epic 是「项目 / 任务」之外的另一条关联线：一个 epic 下的任务可以横跨多个项目与多个迭代，
+      // 这正是面板要的「非线性关联」。两种视图共用同一套折叠 / 虚拟列表 / 计数逻辑。
+      groupMode: 'sprint',
     };
     const listeners = new Set();
     const runtime = { ctx: null };
@@ -584,19 +604,27 @@ window.__ModuleLoader__.load({
       return value;
     }
 
+    /**
+     * 折叠状态的键：`<模式>:<范围>:<组键>`。**模式必须进键**——sprint 与 epic 两种视图里
+     * 完全可能存在同一个组键（比如 'none'），共用一条折叠状态会让两边互相串。
+     */
+    function collapsedKey(scope, group, mode = snapshot.groupMode === 'epic' ? 'epic' : 'sprint') {
+      return `${mode}:${scope}:${group.key}`;
+    }
+
     function groupCollapsed(scope, group) {
-      const key = `${scope}:${group.key}`;
+      const key = collapsedKey(scope, group);
       if (Object.prototype.hasOwnProperty.call(snapshot.collapsed, key)) return Boolean(snapshot.collapsed[key]);
       return group.items.length > 0 && group.items.every((item) => item.category === 'done');
     }
 
     function setGroupCollapsed(scope, group, value) {
-      patch({ collapsed: { ...snapshot.collapsed, [`${scope}:${group.key}`]: value } });
+      patch({ collapsed: { ...snapshot.collapsed, [collapsedKey(scope, group)]: value } });
     }
 
     function setAllCollapsed(scope, groups, value) {
       const next = { ...snapshot.collapsed };
-      for (const group of groups) next[`${scope}:${group.key}`] = value;
+      for (const group of groups) next[collapsedKey(scope, group)] = value;
       patch({ collapsed: next });
     }
 
@@ -1202,16 +1230,54 @@ window.__ModuleLoader__.load({
       return items.filter((item) => (item.project || String(item.key ?? '').split('-')[0]) === project);
     }
 
-    function buildGroups(data, project) {
+    /**
+     * 按 epic 从属关系就地分组（host 的 `epics` 只按「全部项目」算过，切到单个项目时用这份重算）。
+     * 与 host 的 groupByEpic 保持同形：keys + counts + projects（跨几个项目）。
+     * 「无 epic」永远垫底；有 epic 的组按 epic 键升序，同一 epic 的条目仍按列表原本的顺序。
+     */
+    function epicGroups(items) {
+      const byEpic = new Map();
+      for (const item of items) {
+        const key = String(item.epicKey ?? '').trim();
+        const id = key || 'none';
+        if (!byEpic.has(id)) {
+          byEpic.set(id, {
+            id: key || null,
+            name: key ? (String(item.epicSummary ?? '').trim() || key) : t('epicNone'),
+            projects: [],
+            keys: [],
+          });
+        }
+        const group = byEpic.get(id);
+        group.keys.push(item.key);
+        const project = item.project || String(item.key ?? '').split('-')[0];
+        if (project && !group.projects.includes(project)) group.projects.push(project);
+      }
+      return [...byEpic.values()]
+        .map((group) => ({ ...group, projects: group.projects.sort() }))
+        .sort((left, right) => {
+          if ((left.id === null) !== (right.id === null)) return left.id === null ? 1 : -1;
+          return left.id === null ? 0 : String(left.id).localeCompare(String(right.id));
+        });
+    }
+
+    /**
+     * 把可见条目拍成组。`mode` 是分组维度：
+     * - `sprint`（默认）：host 给的 sprints（看全部时）或就地重算；
+     * - `epic`：按 Epic Link 从属关系，组头带 projects（跨 N 个项目）。
+     * 两种模式的组形状一致（key / id / name / items / counts），下游折叠与虚拟列表不用分叉。
+     */
+    function buildGroups(data, project, mode = 'sprint') {
       if (!data || !Array.isArray(data.items)) return [];
       const wanted = !project || project === 'ALL' ? '' : project;
       const visible = projectItems(data, project);
       const byKey = new Map(visible.map((item) => [item.key, item]));
-      // host 给的 sprints 是按「全部项目」算的，切到单个项目时成员表会对不上，
-      // 所以只在看「全部」时复用它，否则就地从可见条目重算（字段都在 item 上）。
-      const raw = !wanted && Array.isArray(data.sprints) && data.sprints.length > 0
-        ? data.sprints
-        : fallbackGroups(visible);
+      // host 给的 sprints / epics 是按「全部项目」算的，切到单个项目时成员表会对不上，
+      // 所以只在看「全部」时复用 host 的，否则就地从可见条目重算（字段都在 item 上）。
+      const fallbackName = mode === 'epic' ? t('epicNone') : t('noSprint');
+      const raw = !wanted && Array.isArray(data[mode === 'epic' ? 'epics' : 'sprints']) && data[mode === 'epic' ? 'epics' : 'sprints'].length > 0
+        ? data[mode === 'epic' ? 'epics' : 'sprints']
+        : (mode === 'epic' ? epicGroups(visible) : fallbackGroups(visible));
       return raw
         .map((group) => {
           const items = (group.keys ?? []).map((key) => byKey.get(key)).filter(Boolean);
@@ -1224,11 +1290,13 @@ window.__ModuleLoader__.load({
           return {
             key: group.id === null || group.id === undefined ? 'none' : String(group.id),
             id: group.id ?? null,
-            name: group.name || t('noSprint'),
+            name: group.name || fallbackName,
             state: group.state || '',
             start: group.start || '',
             end: group.end || '',
             active: Boolean(group.active) || group.state === 'active',
+            // 只有 epic 组有：这组涉及的项目键（组头据此标「跨 N 个项目」）。
+            projects: Array.isArray(group.projects) ? group.projects : [],
             items,
             counts,
           };
@@ -1332,6 +1400,23 @@ window.__ModuleLoader__.load({
   border:1px solid transparent}
 .jmw-pill:hover{border-color:var(--dsw-alias-border-l2,rgba(38,49,72,.18))}
 .jmw-pill.on{color:#ffffff;background:#4d6bfe;border-color:#4d6bfe}
+/* 分组维度（按迭代 / 按 epic）：段控，样式跟筛选按钮同一套，只多一条竖线分隔 */
+.jmw-groupmode{flex:none;display:inline-flex;align-items:center;gap:2px}
+.jmw-groupmode .jmw-filterbtn{border-radius:999px}
+/* 从属关系行（epic / 父任务）：一行小字，带前缀箭头，点一下跳到那条任务 */
+.jmw-rel{display:flex;align-items:center;gap:5px;width:100%;min-width:0;margin-top:2px;padding:0 18px 2px 44px;
+  font:inherit;font-size:11px;line-height:16px;text-align:left;color:var(--dsw-alias-label-tertiary,#8a8f99);
+  background:transparent;border:0;cursor:pointer;border-radius:0}
+.jmw-rel:hover{color:var(--dsw-alias-brand-primary,#4d6bfe)}
+.jmw-relarrow{flex:none;font-size:11px;opacity:.7}
+.jmw-rellabel{flex:none;font-variant-numeric:tabular-nums;
+  color:var(--dsw-alias-label-secondary,#5c6270)}
+.jmw-rel:hover .jmw-rellabel{color:inherit}
+.jmw-relsummary{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.85}
+.jmw-rel.epic .jmw-rellabel{color:var(--dsw-alias-brand-primary,#4d6bfe);opacity:.9}
+/* epic 组头右侧的「跨 N 个项目」标记 */
+.jmw-epicprojects{flex:none;font-size:10.5px;line-height:16px;padding:0 6px;border-radius:999px;
+  color:var(--dsw-alias-label-tertiary,#8a8f99);background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06))}
 .jmw-body{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:6px 0 8px;
   --dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2,rgba(0,0,0,.18));
   --dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-bg-hover-l2,rgba(0,0,0,.3));scrollbar-width:thin}
@@ -1930,9 +2015,14 @@ window.__ModuleLoader__.load({
       if (item.category === 'done') classes.push('done');
       if (open) classes.push('open');
       if (level) classes.push(`pri-${level}`);
+      // 从属关系（非线性关联）：epic / 父任务各一行，点一下就地跳到那条任务（在当前列表里时）。
+      // 两者都没有就完全不占高度——关联是「有才显示」的一等信息，不是每行固定多一行。
+      const relation = renderRelation(item);
       return h('div', {
         key: item.key,
         className: classes.join(' '),
+        // 关联行「跳到那条任务」靠它定位（虚拟列表里只挂视口内的行，所以可能滚不到，见 renderRelation）。
+        'data-item-key': item.key,
       }, [
         h('a', {
           key: 'main',
@@ -1947,8 +2037,60 @@ window.__ModuleLoader__.load({
           h('span', { key: 'sum', className: 'jmw-sum' }, item.summary || t('untitled')),
         ]),
         h('span', { key: 'meta', className: 'jmw-rowmeta' }, meta),
+        relation,
         open ? renderStatusMenu(item) : null,
       ]);
+    }
+
+    /**
+     * 一行的从属关系。epic 优先（它才是「跨项目」的那条线），没有 epic 再退回父任务。
+     * 点一下：目标任务就在当前列表里 → 切到「全部项目」并把该行滚到视口中间；不在列表里（比如
+     * 父任务指派给别人）→ 新窗口打开 Jira 的该条 issue。两者都不改变列表数据，只动视图。
+     */
+    function renderRelation(item) {
+      const epicKey = String(item.epicKey ?? '').trim();
+      const parentKey = String(item.parentKey ?? item.parent ?? '').trim();
+      const key = epicKey || parentKey;
+      if (!key) return null;
+      const isEpic = Boolean(epicKey);
+      const summary = isEpic ? String(item.epicSummary ?? '').trim() : String(item.parentSummary ?? '').trim();
+      const label = isEpic ? t('relEpic', { key }) : t('relParent', { key });
+      const baseUrl = String(snapshot.data?.items?.find((row) => row?.url)?.url ?? '').replace(/\/browse\/[^/]*$/, '');
+      const url = `${baseUrl}/browse/${encodeURIComponent(key)}`;
+      const focus = () => {
+        const present = (snapshot.data?.items ?? []).some((row) => row?.key === key);
+        if (!present) {
+          if (typeof window !== 'undefined' && typeof window.open === 'function') window.open(url, '_blank', 'noopener');
+          return;
+        }
+        // 先落到「全部项目」再滚：该任务可能属于另一个项目的 tab，只滚不切会滚到不存在的位置。
+        patch({ project: 'ALL' });
+        requestAnimationFrame(() => {
+          const host = typeof document !== 'undefined' ? document.querySelector('.jmw-body') : null;
+          const target = host?.querySelector?.(`[data-item-key="${cssEscape(key)}"]`);
+          if (target && typeof target.scrollIntoView === 'function') target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        });
+      };
+      return h('button', {
+        key: 'relation',
+        type: 'button',
+        className: `jmw-rel${isEpic ? ' epic' : ''}`,
+        title: summary ? `${label} · ${summary}` : t('relOpen', { key }),
+        onClick: (event) => {
+          event?.preventDefault?.();
+          event?.stopPropagation?.();
+          focus();
+        },
+      }, [
+        h('span', { key: 'arrow', className: 'jmw-relarrow', 'aria-hidden': true }, '↳'),
+        h('span', { key: 'label', className: 'jmw-rellabel' }, label),
+        summary ? h('span', { key: 'summary', className: 'jmw-relsummary' }, summary) : null,
+      ]);
+    }
+
+    /** 选择器里的任务键（PROJ-123）只含字母数字与连字符，转义只为稳妥，不引入依赖。 */
+    function cssEscape(value) {
+      return String(value).replace(/["\\\]]/g, (ch) => `\\${ch}`);
     }
 
     function Panel() {
@@ -2047,7 +2189,9 @@ window.__ModuleLoader__.load({
       const tabs = projectTabs(state.data);
       // 选中的项目在新结果里没了（例如那批 issue 做完了）就自动回到「全部」。
       const project = tabs.some((tab) => tab.key === state.project) ? state.project : 'ALL';
-      const groups = buildGroups(state.data, project);
+      // 分组维度：sprint（默认）| epic（按 epic 从属关系）。两者共用折叠 / 虚拟列表 / 计数。
+      const groupMode = state.groupMode === 'epic' ? 'epic' : 'sprint';
+      const groups = buildGroups(state.data, project, groupMode);
       // 当前实际加载到的行数（用于「已加载 N 条 / 加载更多」）。
       const loadedCount = projectItems(state.data, project).length;
       // 「共 N 项」= approximate-count 拿到的准确总数（不是当前页条数）；拿不到就不显示
@@ -2095,7 +2239,7 @@ window.__ModuleLoader__.load({
 
       // 换项目 tab / 换状态筛选 / 换搜索词 / 刷新出新数据：滚动位置回到顶部（比较自然）。
       // 折叠只是重算条目，不动滚动位置，所以不放进 deps。
-      const scrollResetKey = `${project}|${statusFilter}|${searchText}|${state.data?.generatedAt ?? ''}`;
+      const scrollResetKey = `${groupMode}|${project}|${statusFilter}|${searchText}|${state.data?.generatedAt ?? ''}`;
       React.useEffect(() => {
         const element = bodyRef.current;
         if (!element) return; // 迷你 React / 还没挂载：没有可滚动元素
@@ -2215,6 +2359,10 @@ window.__ModuleLoader__.load({
             }, [
               h(Chevron, { key: 'chev', open: !entry.collapsed }),
               h('span', { key: 'name', className: 'jmw-sprint' }, entry.group.name),
+              // epic 视图专有：这组横跨几个项目（跨项目才是「非线性关联」最值得看的一眼）。
+              entry.group.projects?.length > 1
+                ? h('span', { key: 'projects', className: 'jmw-epicprojects' }, t('epicProjects', { count: entry.group.projects.length }))
+                : null,
               h('span', { key: 'count', className: 'jmw-count' }, groupSummary(entry.group)),
             ]),
             groupMetaLine(entry.group),
@@ -2376,6 +2524,23 @@ window.__ModuleLoader__.load({
                 onClick: () => stripRef.current?.scrollBy?.({ left: 180, behavior: 'smooth' }),
               }, '›')
               : null,
+            // 分组维度：按迭代（默认）/ 按 epic。放在筛选左边，选中态与筛选按钮同一套样式。
+            h('span', { key: 'groupmode', className: 'jmw-groupmode', role: 'group', 'aria-label': t('groupByEpic') }, [
+              h('button', {
+                key: 'sprint',
+                type: 'button',
+                className: `jmw-filterbtn${groupMode === 'sprint' ? ' set' : ''}`,
+                'aria-pressed': groupMode === 'sprint' ? 'true' : 'false',
+                onClick: () => patch({ groupMode: 'sprint' }),
+              }, t('groupBySprint')),
+              h('button', {
+                key: 'epic',
+                type: 'button',
+                className: `jmw-filterbtn${groupMode === 'epic' ? ' set' : ''}`,
+                'aria-pressed': groupMode === 'epic' ? 'true' : 'false',
+                onClick: () => patch({ groupMode: 'epic' }),
+              }, t('groupByEpic')),
+            ]),
             // 单选状态筛选：平时显示「筛选」，选了某个状态后显示状态名（保持一致）。
             h('button', {
               key: 'filter',

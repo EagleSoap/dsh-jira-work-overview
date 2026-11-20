@@ -237,6 +237,11 @@ const mkItem = (key, priority, sprint, status = 'Backlog', category = 'new', ran
   priority,
   priorityRank: rank,
   parent: '',
+  // 从属关系（epic / 父任务）：默认没有，专门给 L 段造一组带 epic 的条目。
+  parentKey: '',
+  parentSummary: '',
+  epicKey: '',
+  epicSummary: '',
   type: '故事',
   due: '',
   overdue: false,
@@ -565,9 +570,12 @@ allPill.props.onClick();
 panel = renderPanel();
 
 /* ---------------- B：tab 行右侧的状态筛选（单选，默认全部） ---------------- */
+// 状态筛选按钮：分组维度（按迭代 / 按 epic）也是 .jmw-filterbtn，所以按「带 ▾」的文案取，
+// 不能只取第一个——第一个现在是「按迭代」。
 const filterBtn = () => collect(panel, (row) => row.type === 'button' && String(row.props.className ?? '').split(' ')[0] === 'jmw-filterbtn')[0];
-console.log('\nB tab 行右侧有筛选按钮:', Boolean(filterBtn()), '| 文案:', JSON.stringify(text(filterBtn()).trim()));
-filterBtn().props.onClick();
+const statusFilterBtn = () => collect(panel, (row) => row.type === 'button' && String(row.props.className ?? '').split(' ')[0] === 'jmw-filterbtn' && String(text(row) ?? '').includes('▾'))[0];
+console.log('\nB tab 行右侧有筛选按钮:', Boolean(statusFilterBtn()), '| 文案:', JSON.stringify(text(statusFilterBtn()).trim()));
+statusFilterBtn().props.onClick();
 panel = renderPanel();
 console.log('B 打开筛选菜单 chips:', JSON.stringify(menuChips(panel).map((chip) => text(chip).trim())));
 console.log('B 菜单结构 .jmw-menu / .jmw-menu-chips:', byClass(panel, 'jmw-menu').length, '/', collect(panel, (row) => String(row.props.className ?? '') === 'jmw-menu-chips').length);
@@ -580,10 +588,10 @@ console.log('B 点「IN QA」后的命令:', lastLine);
 console.log('B 命令里含 --status=IN QA:', /--status=IN QA(\s|$)/.test(lastLine));
 console.log('B 菜单已关闭:', byClass(panel, 'jmw-menu').length === 0);
 console.log('B 筛选后副标题:', JSON.stringify(subtitleText()), '| 行数:', rows(panel).length, '（fixture 里 IN QA 有 2 条）');
-console.log('B 按钮显示当前状态名:', JSON.stringify(text(filterBtn()).trim()));
+console.log('B 按钮显示当前状态名:', JSON.stringify(text(statusFilterBtn()).trim()));
 
 /* Esc 关筛选菜单（与状态下拉同一层） */
-filterBtn().props.onClick();
+statusFilterBtn().props.onClick();
 panel = renderPanel();
 const hadMenu = byClass(panel, 'jmw-menu').length;
 keyHandlers[keyHandlers.length - 1]({ key: 'Escape', preventDefault() {} });
@@ -594,7 +602,7 @@ console.log('B Esc 关筛选菜单:', hadMenu === 1, '→', byClass(panel, 'jmw-
 const ENTRY_TOTAL = 403;
 const ROW_SIZE = 32;
 activeFixture.current = BIG_FIXTURE;
-filterBtn().props.onClick();
+statusFilterBtn().props.onClick();
 panel = renderPanel();
 menuChips(panel).find((chip) => text(chip).trim().startsWith('全部状态')).props.onClick({ preventDefault() {} });
 await settle();
@@ -605,7 +613,7 @@ const vrowsOf = () => collect(panel, (row) => String(row.props.className ?? '') 
 const totalHeight = () => vlistOf()?.props?.style?.height;
 const headOf = (name) => groupHeads(panel).find((head) => text(head).includes(name));
 const pickStatus = async (label) => {
-  filterBtn().props.onClick();
+  statusFilterBtn().props.onClick();
   panel = renderPanel();
   menuChips(panel).find((chip) => text(chip).trim().startsWith(label)).props.onClick({ preventDefault() {} });
   await settle();
@@ -902,7 +910,7 @@ check(/APP-H2\s*已改为\s*已完成/.test(flashText()) || flashText().includes
 
 /* 新状态并入筛选菜单：fixture 的 statusOptions 里没有「正在进行」，本地更新要把它补进去并保持排序。 */
 await pickTransition('APP-H1', '正在进行');
-filterBtn().props.onClick();
+statusFilterBtn().props.onClick();
 panel = renderPanel();
 const optionTexts = menuChips(panel).map((chip) => text(chip).replace('✓', '').trim());
 check(
@@ -910,7 +918,7 @@ check(
   'J 新状态并入状态筛选菜单，并按「分类 → 名字」排序',
   JSON.stringify(optionTexts),
 );
-filterBtn().props.onClick();
+statusFilterBtn().props.onClick();
 panel = renderPanel();
 
 /* 状态筛选开着时改到别的状态：跟重新查询一样，这条要从列表消失，总数也要减。 */
@@ -1070,6 +1078,88 @@ const fbVrows = collect(fbTree, (row) => String(row.props?.className ?? '') === 
 console.log('\nF 兜底（拿不到 @tanstack/react-virtual）：warn 次数 =', fallbackWarns.filter((line) => line.includes('react-virtual')).length,
   '（期望 1）| DOM 任务行数 =', fbRows.length, '（期望 400 = 全部行都直接画出来）| DOM 条目数 =', fbVrows.length,
   '| 占位高 =', collect(fbTree, (row) => String(row.props?.className ?? '') === 'jmw-vlist')[0]?.props?.style?.height);
+
+/* ---------------- L：从属关系（epic / 父任务）----------------
+   「非线性关联」：epic 横跨两个项目 + 一个子任务带父任务 + 一个什么都没挂的普通任务。
+   验证 ① 关联行按 epic 优先；② 组头标「跨 N 个项目」；③ 切到「按 epic」后分组按 epic 重排；
+   ④ 点了不在列表里的关联键会新开窗口（不会静默什么都不做）。 */
+const REL_ITEMS = [
+  { ...mkItem('APP-R1', 'High', S30), summary: 'R1 在 epic 里', project: 'APP', epicKey: 'APP-100', epicSummary: '跨项目 epic' },
+  { ...mkItem('APP-R2', 'Low', null, 'IN QA', 'indeterminate'), summary: 'R2 是别人的子任务', project: 'APP', parentKey: 'APP-200', parentSummary: '父任务标题' },
+  { ...mkItem('OTH-R3', 'Low', S29, 'Backlog', 'new'), summary: 'R3 没挂 epic', project: 'OTH' },
+];
+const REL_FIXTURE = {
+  ...FIXTURE,
+  items: REL_ITEMS,
+  sprints: [
+    { id: 30, name: S30.name, state: S30.state, start: S30.start, end: S30.end, active: false, keys: ['APP-R1'], counts: { new: 1, indeterminate: 0, done: 0, total: 1 } },
+    { id: 29, name: S29.name, state: S29.state, start: S29.start, end: S29.end, active: true, keys: ['OTH-R3'], counts: { new: 1, indeterminate: 0, done: 0, total: 1 } },
+    { id: null, name: '无迭代', state: '', start: '', end: '', active: false, keys: ['APP-R2'], counts: { new: 0, indeterminate: 1, done: 0, total: 1 } },
+  ],
+  epics: [
+    { id: 'APP-100', key: 'APP-100', name: '跨项目 epic', projects: ['APP'], keys: ['APP-R1'], counts: { new: 1, indeterminate: 0, done: 0, total: 1 } },
+    { id: null, key: '', name: '无 epic', projects: ['APP', 'OTH'], keys: ['APP-R2', 'OTH-R3'], counts: { new: 1, indeterminate: 1, done: 0, total: 2 } },
+  ],
+  total: 3,
+  projectTotals: { APP: 2, OTH: 1 },
+  counts: { new: 2, indeterminate: 1, done: 0, total: 3 },
+};
+
+activeFixture.current = REL_FIXTURE;
+statusFilterBtn().props.onClick();
+panel = renderPanel();
+menuChips(panel).find((chip) => text(chip).trim().startsWith('全部状态')).props.onClick({ preventDefault() {} });
+await settle();
+panel = renderPanel();
+
+const groupModeButtons = () => collect(panel, (row) => row.type === 'button'
+  && ['按迭代', '按 epic'].includes(String(text(row) ?? '').trim()));
+console.log('\nL 分组维度按钮:', JSON.stringify(groupModeButtons().map((btn) => text(btn).trim())));
+check(groupModeButtons().length === 2, 'L 有「按迭代 / 按 epic」两个分组维度', JSON.stringify(groupModeButtons().map((btn) => text(btn).trim())));
+const relLines = () => collect(panel, (row) => String(row.props.className ?? '').split(' ')[0] === 'jmw-rel')
+  .map((row) => text(row).replace(/\s+/g, ' ').trim());
+console.log('L 关联行（sprint 视图）:', JSON.stringify(relLines()));
+check(relLines().length === 2, 'L 只有挂了关联的两条任务画关联行（没挂的不占高度）', JSON.stringify(relLines()));
+check(relLines().some((line) => line.includes('epic APP-100')), 'L epic 优先于父任务', JSON.stringify(relLines()));
+check(relLines().some((line) => line.includes('父任务 APP-200')), 'L 没有 epic 时显示父任务', JSON.stringify(relLines()));
+
+// 点「不在当前列表里」的关联键 → 新窗口打开 Jira（不静默）。
+// 替身里没有 window：临时挂一个（Node 的 globalThis 允许 defineProperty，但不允许直接赋值）。
+const opened = [];
+const hadWindow = Object.prototype.hasOwnProperty.call(globalThis, 'window');
+const prevWindow = globalThis.window;
+Object.defineProperty(globalThis, 'window', { value: { open: (url) => { opened.push(url); } }, configurable: true, writable: true });
+const parentRel = collect(panel, (row) => String(row.props.className ?? '').split(' ')[0] === 'jmw-rel')
+  .find((row) => text(row).includes('APP-200'));
+parentRel.props.onClick({ preventDefault() {}, stopPropagation() {} });
+if (hadWindow) Object.defineProperty(globalThis, 'window', { value: prevWindow, configurable: true, writable: true });
+else delete globalThis.window;
+console.log('L 点不在列表里的父任务 → 打开的地址:', JSON.stringify(opened));
+check(opened.length === 1 && opened[0].endsWith('/browse/APP-200'), 'L 点不在列表里的关联键会打开 Jira 对应 issue', JSON.stringify(opened));
+
+// 切到「按 epic」：组头按 epic 重排，且无 epic 组垫底。
+groupModeButtons().find((btn) => text(btn).trim() === '按 epic').props.onClick();
+panel = renderPanel();
+const epicHeads = groupHeads(panel).map((head) => text(head).replace(/\s+/g, ' ').trim());
+console.log('L 切到「按 epic」后的组头:', JSON.stringify(epicHeads));
+check(epicHeads.length === 2 && epicHeads[0].includes('跨项目 epic') && epicHeads[1].includes('无 epic'),
+  'L 「按 epic」分组：有 epic 的组在前、无 epic 垫底', JSON.stringify(epicHeads));
+
+// 切成「全部项目」时，无 epic 组横跨 APP + OTH 两个项目 → 组头标「2 个项目」。
+const allProjects = collect(panel, (row) => row.type === 'button' && String(row.props.className ?? '').split(' ')[0] === 'jmw-pill');
+const allPillRel = allProjects.find((row) => text(row).trim() === '全部项目');
+if (allPillRel) {
+  allPillRel.props.onClick();
+  panel = renderPanel();
+}
+const crossBadge = collect(panel, (row) => String(row.props.className ?? '') === 'jmw-epicprojects').map((row) => text(row).trim());
+console.log('L 跨项目徽标（全部项目下）:', JSON.stringify(crossBadge));
+check(crossBadge.length >= 1 && crossBadge.every((label) => label.includes('2')), 'L 跨项目的 epic 组标出项目数', JSON.stringify(crossBadge));
+
+// 切回「按迭代」：分组维度不影响列表数据，行数不变。
+groupModeButtons().find((btn) => text(btn).trim() === '按迭代').props.onClick();
+panel = renderPanel();
+check(rows(panel).length === 3, 'L 切回「按迭代」行数不变（两种视图共用同一批数据）', String(rows(panel).length));
 
 for (const off of effects) { try { off?.(); } catch { /* ignore */ } }
 console.log(failed === 0 ? '\n=== visual G/H/I/J/K 段（条目身份 / 估算 / 优先级名次 / 失败提示 / 改状态就地更新 / 搜索）：全部通过 ===' : `\n=== visual G/H/I/J/K 段（条目身份 / 估算 / 优先级名次 / 失败提示 / 改状态就地更新 / 搜索）：${failed} 项失败 ===`);

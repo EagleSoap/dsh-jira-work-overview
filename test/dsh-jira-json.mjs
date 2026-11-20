@@ -64,6 +64,15 @@ console.log('query:', JSON.stringify(payload.query));
 console.log('credentialSource:', payload.credentialSource);
 console.log('sprint:', JSON.stringify(payload.sprint));
 console.log('counts:', JSON.stringify(payload.counts));
+// 从属关系（epic 视图）：载荷里必须有 epics 数组、形状与 sprints 同构（keys + counts + projects），
+// 且每条 item 都带 parentKey / epicKey（没挂就是空串，不能是 undefined——前端靠它判断要不要画关联行）。
+console.log('epics:', JSON.stringify((payload.epics ?? []).map((group) => ({ key: group.key, name: group.name, projects: group.projects, total: group.counts?.total }))));
+const epicsOk = Array.isArray(payload.epics)
+  && payload.epics.every((group) => Array.isArray(group.keys) && Array.isArray(group.projects) && typeof group.counts?.total === 'number');
+const relationFieldsOk = payload.items.every((item) => typeof item.parentKey === 'string' && typeof item.epicKey === 'string');
+console.log(epicsOk ? 'PASS  epics 载荷形状与 sprints 同构' : 'FAIL  epics 载荷形状不对');
+console.log(relationFieldsOk ? 'PASS  每条 item 都带 parentKey / epicKey 字符串' : 'FAIL  item 缺 parentKey / epicKey');
+if (!epicsOk || !relationFieldsOk) process.exitCode = 1;
 console.log('items:', payload.items.length);
 for (const item of payload.items.slice(0, 3)) {
   console.log('  ·', item.key, '|', item.category, '|', item.status, '|', item.priority, '|', item.summary.slice(0, 28), '|', item.url);

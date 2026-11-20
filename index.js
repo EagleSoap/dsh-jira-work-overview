@@ -48,6 +48,9 @@ const LIST_FIELDS = [
   'reporter',
   'duedate',
   'parent',
+  // 父任务（子任务）与 epic：面板靠这两条把「项目 / 任务」按从属关系（非线性）串起来，
+  // 见 buildItemJson 的 parentKey / epicKey 与 groupByEpic。epic 是站点自定义字段（id 因站点而异，
+  // 不能写死），真正的字段 id 由 resolveEpicField 现查，这里只是让「带 epic 的那次查询」走到它。
   'labels',
   'updated',
 ];
@@ -193,6 +196,18 @@ function httpFailure(status, statusText, path, detail) {
 /** Sprint 字段的 schema 标识（locale 无关）；找不到时退回 APP 站点的实际字段 id。 */
 const SPRINT_FIELD_SCHEMA = 'com.pyxis.greenhopper.jira:gh-sprint';
 const SPRINT_FIELD_FALLBACK = 'customfield_10020';
+/**
+ * Epic 字段的 schema 标识（locale 无关，id 因站点而异，所以只认 schema、不写死 id）。
+ *
+ * **顺序有意义**：同一个站点可能同时存在两个（macOS 上的实测站点就有 10011 + 10014），
+ * `gh-epic-link` 才是「这条 issue 属于哪个 epic」（值形如 `"PROJ-123"` 的键串），
+ * `gh-epic-label` 是 epic 的名称文本（团队管理型项目才填，多数站点恒空）。
+ * 先 link 再 label，否则会拿到一个恒空字段、epic 视图永远只有「无 epic」一组。
+ */
+const EPIC_FIELD_SCHEMAS = [
+  'com.pyxis.greenhopper.jira:gh-epic-link',
+  'com.pyxis.greenhopper.jira:gh-epic-label',
+];
 
 const DEFAULTS = {
   baseUrl: '',
@@ -342,6 +357,8 @@ const TEXT = {
     'sprint.late': '结束日已过 {days} 天，但仍是 active',
     'sprint.inProgress': '进行中',
     'sprint.readFailed': '读取看板 {boardId} 的 active 迭代失败：{message}',
+    // 从属关系（epic）：面板「按 epic 分组」视图的组头文案
+    'epic.none': '无 epic',
     // 文本列表
     'list.header': '## {scope} — {count} 条',
     'list.meta': '- Jira：{baseUrl}　项目：{project}　账号：{account}',
@@ -509,6 +526,7 @@ const TEXT = {
     'sprint.late': 'End date passed {days} days ago but it is still active',
     'sprint.inProgress': 'In progress',
     'sprint.readFailed': 'Failed to read the active sprint of board {boardId}: {message}',
+    'epic.none': 'No epic',
     'list.header': '## {scope} — {count} items',
     'list.meta': '- Jira: {baseUrl} · Project: {project} · Account: {account}',
     'list.accountMissing': '(email not configured)',
@@ -845,7 +863,10 @@ async function runCommand(jira, raw, signal) {
 async function runQuery(jira, { json, limit, rest, status, jql, scope, search, signal }) {
   if (rest && ISSUE_KEY.test(rest.toUpperCase())) {
     const key = rest.toUpperCase();
-    const fields = [...LIST_FIELDS, await resolveSprintField(jira, signal), 'description', 'created', 'components', 'comment'];
+    // 单条 issue 也要带 epic 字段：详情里的关联行与列表走同一套 buildItemJson。
+    const [sprintField, epicField] = await Promise.all([resolveSprintField(jira, signal), resolveEpicField(jira, signal)]);
+    const fields = [...LIST_FIELDS, sprintField, epicField, 'description', 'created', 'components', 'comment']
+      .filter((id, index, all) => id && all.indexOf(id) === index);
     const issue = await jira.get(`/rest/api/3/issue/${encodeURIComponent(key)}`, { fields: fields.join(',') }, signal);
     return json
       ? JSON.stringify(buildIssueJson(issue, jira, await jira.priorityRanks(signal).catch(() => null)), null, 2)
@@ -1275,8 +1296,11 @@ async function searchIssues(jira, jql, limit, signal) {
   let pageToken;
   let finished = false; // 自然翻到底（isLast / 没有下一页 / 空页）
   let truncated = false; // 被安全上限或总超时打断：后面确实还有
-  const sprintField = await resolveSprintField(jira, signal);
-  const fields = [...LIST_FIELDS, sprintField].join(',');
+  // epic 字段 id 与 sprint 字段 id 一样是本实例缓存的一次性解析（都是站点自定义字段）。
+  // 两个都要串进 fields：**不要 `filter(Boolean)` 去重**——序列化器没有去重，重复的字段 id
+  // 在 Jira 那边是「同一字段请求两次」，没必要；这里保证两者至少各出现一次、并且后者缺省时不带空串。
+  const [sprintField, epicField] = await Promise.all([resolveSprintField(jira, signal), resolveEpicField(jira, signal)]);
+  const fields = [...LIST_FIELDS, sprintField, epicField].filter((id, index, all) => id && all.indexOf(id) === index).join(',');
 
   for (let page = 0; page < MAX_PAGES && issues.length < cap; page += 1) {
     const params = {
@@ -1332,6 +1356,33 @@ async function resolveSprintField(jira, signal) {
   return jira.sprintField;
 }
 
+/**
+ * epic 字段 id：和 sprint 一样是站点自定义字段，id 因站点而异（新站点可能是 10000 起编号），
+ * 所以按 schema.custom 现查，查不到再按字段名兜底，最后才当「这个站点没有 epic 字段」。
+ * 没有 epic 字段不是错误：面板的 epic 视图会退化成「无 epic」一组，主列表照常。
+ */
+async function resolveEpicField(jira, signal) {
+  if (jira.epicField !== undefined) return jira.epicField;
+  try {
+    const fields = await jira.get('/rest/api/3/field', {}, signal);
+    const list = Array.isArray(fields) ? fields : [];
+    // 按 EPIC_FIELD_SCHEMAS 的**优先级**找（不是按站点字段表的顺序）：link 字段优先，
+    // 只有站点确实没有 link 字段时才退到 label。
+    const bySchema = EPIC_FIELD_SCHEMAS
+      .map((schema) => list.find((field) => field?.schema?.custom === schema))
+      .find(Boolean);
+    const match = bySchema
+      // 最后按名字兜底：字段名可能被站点改成中文（实测站点叫「长篇故事链接」），
+      // 所以只认类型 any（Epic Link 一定是任意类型字段），不依赖英文名。
+      ?? list.find((field) => String(field?.schema?.type ?? '').toLowerCase() === 'any'
+        && /epic|长篇故事/i.test(String(field?.name ?? '')));
+    jira.epicField = typeof match?.id === 'string' ? match.id : '';
+  } catch {
+    jira.epicField = '';
+  }
+  return jira.epicField;
+}
+
 /** 一条 issue 的 sprint 字段可能是数组（被搬过迭代）；优先当前活跃的那个，否则取 id 最大的。 */
 function sprintOf(issue, fieldId) {
   if (!fieldId) return undefined;
@@ -1340,6 +1391,28 @@ function sprintOf(issue, fieldId) {
   if (list.length === 0) return undefined;
   return list.find((row) => row.state === 'active')
     ?? [...list].sort((a, b) => Number(b.id ?? 0) - Number(a.id ?? 0))[0];
+}
+
+/**
+ * 一条 issue 的 epic。Epic Link 字段的形状随站点而异：
+ * - 新版 / Team-managed：`{ key, name, summary, ... }`（对象）；
+ * - 旧版公司管理型：`"PROJ-123"`（纯键串）或 `{ id: "10001" }`（只有 id，没有键）。
+ * 只有键能用（epic 视图按键归组、按键跳转）；只有 id 时也返回出来，面板至少能显示「有 epic 但点不过去」。
+ */
+function epicOf(issue, fieldId) {
+  if (!fieldId) return { key: '', id: '', summary: '' };
+  const raw = issue?.fields?.[fieldId];
+  const row = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof row === 'string') {
+    const key = row.trim();
+    return { key, id: '', summary: '' };
+  }
+  if (!row || typeof row !== 'object') return { key: '', id: '', summary: '' };
+  return {
+    key: typeof row.key === 'string' ? row.key.trim() : '',
+    id: row.id === undefined || row.id === null ? '' : String(row.id),
+    summary: String(row.summary ?? row.name ?? '').trim(),
+  };
 }
 
 // --------------------------------------------------------------- 后台监视
@@ -3191,6 +3264,8 @@ function buildWorkListJson(issues, jql, scope, jira, sprint, page, totals) {
     watch: watchSnapshot(jira.watch),
     counts: { ...counts, total: items.length },
     sprints: groupBySprint(items),
+    // 从属关系视图（面板的「按 epic 分组」）：同形载荷，前端复用同一套折叠 / 虚拟列表。
+    epics: groupByEpic(items),
     items,
   };
 }
@@ -3220,6 +3295,7 @@ function buildWorkListErrorJson(jira, error, { jql, scope, status, limit, search
     watch: watchSnapshot(jira.watch),
     counts: { new: 0, indeterminate: 0, done: 0, total: 0 },
     sprints: [],
+    epics: [],
     items: [],
   };
 }
@@ -3265,6 +3341,52 @@ function groupBySprint(items) {
     });
 }
 
+/**
+ * 按 epic 分组：epic 是「项目 / 任务」之外的另一条从属线（一个 epic 下的任务可以横跨多个项目，
+ * 也可以横跨多个 sprint），面板据此提供「按 epic 关联查看」。与 groupBySprint 同形（keys + counts），
+ * 前端折叠 / 计数 / 虚拟列表完全复用；额外带 projects（这组涉及哪些项目键），用来标「跨 N 个项目」。
+ * 排序：有 epic 的按 epics 里出现的顺序（Jira 的 updated DESC），「无 epic」永远垫底。
+ */
+function groupByEpic(items) {
+  // Epic Link 字段只给键串（`"PROJ-123"`），不带标题（标题在 gh-epic-label 里，且多数站点为空），
+  // 所以组名优先用 epic 自己的摘要；拿不到就退回键——键本身已经能认出是哪个 epic。
+  const summaries = new Map();
+  for (const item of items) {
+    const key = String(item.epicKey ?? '').trim();
+    const summary = String(item.epicSummary ?? '').trim();
+    if (key && summary && !summaries.has(key)) summaries.set(key, summary);
+  }
+  const groups = new Map();
+  for (const item of items) {
+    const key = String(item.epicKey ?? '').trim();
+    const id = key || 'none';
+    if (!groups.has(id)) {
+      groups.set(id, {
+        id: key || null,
+        key,
+        name: key ? (summaries.get(key) || key) : t('epic.none'),
+        projects: [],
+        keys: [],
+        counts: { new: 0, indeterminate: 0, done: 0 },
+      });
+    }
+    const group = groups.get(id);
+    group.keys.push(item.key);
+    if (item.project && !group.projects.includes(item.project)) group.projects.push(item.project);
+    if (Object.prototype.hasOwnProperty.call(group.counts, item.category)) group.counts[item.category] += 1;
+  }
+  return [...groups.values()]
+    .map((group) => ({
+      ...group,
+      projects: group.projects.sort(),
+      counts: { ...group.counts, total: group.keys.length },
+    }))
+    .sort((left, right) => {
+      if ((left.id === null) !== (right.id === null)) return left.id === null ? 1 : -1;
+      return left.id === null ? 0 : String(left.id).localeCompare(String(right.id));
+    });
+}
+
 /** 这个优先级在站点顺序里的名次（0 = 最高级）。先按 id 命中（站点改名不影响），再按小写名字命中；都没有就是 null。 */
 function priorityRankOf(priority, ranks) {
   if (!ranks || !priority) return null;
@@ -3291,7 +3413,14 @@ function buildItemJson(issue, jira, ranks) {
     // 面板据此上底色（见 client.js 的 priorityLevel）；拿不到名次就是 null，面板退回按名字判断。
     priorityId: fields.priority?.id === undefined || fields.priority?.id === null ? '' : String(fields.priority.id),
     priorityRank: priorityRankOf(fields.priority, ranks),
+    // 从属关系（非线性关联）：parent 是子任务的父任务（Jira 原生字段），epic 是 Epic Link
+    // （站点自定义字段，字段 id 由 resolveEpicField 现查）。两者都可能缺——缺了就是空串，
+    // 面板不显示关联行，也绝不因为「拿不到」而报错。parent 这个旧字段名保留兼容。
     parent: fields.parent?.key ?? '',
+    parentKey: fields.parent?.key ?? '',
+    parentSummary: String(fields.parent?.fields?.summary ?? '').trim(),
+    epicKey: epicOf(issue, jira.epicField).key,
+    epicSummary: epicOf(issue, jira.epicField).summary,
     due: typeof fields.duedate === 'string' ? fields.duedate.slice(0, 10) : '',
     overdue: Boolean(fields.duedate) && isOverdue(fields.duedate),
     updated: typeof fields.updated === 'string' ? fields.updated.slice(0, 10) : '',
