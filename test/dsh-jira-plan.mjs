@@ -96,16 +96,9 @@ const hostCtx = {
     if (name === 'remote') return remoteService;
     if (name === 'agents') return { list: () => sessions.map((session) => ({ id: session.id, session })) };
     if (name === 'workspaces') {
-      return {
-        async archiveSession(sessionId, options) {
-          archiveCalls.push({ sessionId, stopActivity: options?.stopActivity === true });
-          if (archiveRefuses) {
-            const error = new Error(`cannot archive session '${sessionId}'`);
-            error.code = 'workspace/session-active';
-            throw error;
-          }
-        },
-      };
+      // 回归护栏：插件不能直接取 `ctx.workspaces` —— 注册表在服务树上的名字是 `workspaceRegistry`，
+      // 这个键本来就拿不到（真机上曾因此报 `no workspaces service`）。
+      throw new Error('cannot get property "workspaces" without inject');
     }
     if (name === 'settings') {
       return {
@@ -122,6 +115,20 @@ const hostCtx = {
 const sessions = [];
 const remoteCalls = [];
 const remoteService = {
+  // 基座的 archive 门面：真实现是 `remote.workspaces.archiveSession({ sessionId, stopActivity })`，
+  // 把 registry 的错误翻成 `session/not-found` / `workspace/session-active` 两个码。
+  workspaces: {
+    async archiveSession(request) {
+      const sessionId = request?.sessionId;
+      archiveCalls.push({ sessionId, stopActivity: request?.stopActivity === true });
+      if (archiveRefuses) {
+        const error = new Error(`cannot archive session '${sessionId}'`);
+        error.code = 'workspace/session-active';
+        throw error;
+      }
+      return { archivedSessionIds: archiveCalls.map((call) => call.sessionId) };
+    },
+  },
   session: {
     async create({ workspaceId }) {
       remoteCalls.push({ call: 'create', workspaceId });
@@ -261,7 +268,7 @@ archiveRefuses = false;
 const dropped = await planPayload({ action: 'drop', issue: 'APP-1' });
 syncWrites();
 check(dropped.ok === true, '归档成功 → 返回 ok', JSON.stringify({ ok: dropped.ok, sessionId: dropped.sessionId }));
-check(archiveCalls.some((call) => call.sessionId === created.sessionId && call.stopActivity === true), '用基座 workspaces.archiveSession 归档（带 stopActivity）', JSON.stringify(archiveCalls.slice(-1)));
+check(archiveCalls.some((call) => call.sessionId === created.sessionId && call.stopActivity === true), '用基座 remote.workspaces.archiveSession 归档（带 stopActivity）', JSON.stringify(archiveCalls.slice(-1)));
 check(!String(settingsRaw.planSessions).includes('APP-1'), '归档后绑定被删除（卡片回到未计划）', JSON.stringify(settingsRaw.planSessions));
 const dropAgain = await planPayload({ action: 'drop', issue: 'APP-1' });
 check(dropAgain.ok === false && /绑定|bound/i.test(String(dropAgain.error)), '对没绑定的卡再删 → 明确报错', dropAgain.error);

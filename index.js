@@ -319,6 +319,7 @@ const TEXT = {
     'err.planAction': '不支持的计划对话操作：{action}（支持 create / search / link / unlink / drop / clear）。',
     'err.planUnbound': '{key} 没有绑定计划对话：没有可归档的会话。',
     'err.planArchive': '归档计划对话失败：{message}',
+    'err.planNoWorkspaces': '这个 profile 没有提供工作区归档通道（remote.workspaces）',
     'err.planSession': '缺少会话 id：没法把计划对话绑定到任务上。',
     'err.planSearch': '按任务搜计划对话失败：{message}',
     'err.planCreate': '创建计划对话失败：{message}',
@@ -519,6 +520,7 @@ const TEXT = {
     'err.planAction': 'Unsupported planning-session action: {action} (create / search / link / unlink / drop / clear).',
     'err.planUnbound': '{key} has no bound planning session: nothing to archive.',
     'err.planArchive': 'Could not archive the planning session: {message}',
+    'err.planNoWorkspaces': 'this profile exposes no workspace archive channel (remote.workspaces)',
     'err.planSession': 'Missing session id: cannot bind a planning session to the issue.',
     'err.planSearch': 'Searching session logs for the planning session failed: {message}',
     'err.planCreate': 'Could not create the planning session: {message}',
@@ -3189,13 +3191,18 @@ async function dropPlanSession(ctx, settings, key) {
   const map = parsePlanSessions(String(liveSetting(settings, 'planSessions', '') ?? ''));
   const sessionId = String(map[key] ?? '');
   if (!sessionId) throw new Error(t('err.planUnbound', { key }));
-  const workspaces = safeService(ctx, 'workspaces');
+  // 归档走基座的 workspace 遥控（`remote.workspaces.archiveSession`）：
+  // 直接 `ctx.get('workspaces')` 拿不到——注册表在服务树上的名字是 `workspaceRegistry`
+  // （`dsh-workspace` 的 `super(ctx, "workspaceRegistry")`），`workspace` 是另一条资源字段的
+  // 匹配前缀。遥控层才是对外的门面，也替我们把错误码翻成 `session/not-found` /
+  // `workspace/session-active`。
+  const workspaces = safeService(ctx, 'remote')?.workspaces;
   if (!workspaces || typeof workspaces.archiveSession !== 'function') {
-    throw new Error(t('err.planArchive', { message: 'no workspaces service' }));
+    throw new Error(t('err.planArchive', { message: t('err.planNoWorkspaces') }));
   }
   try {
     // stopActivity：规划对话此刻没在跑就是空操作；正在跑就一并停下，否则基座会拒收。
-    await workspaces.archiveSession(sessionId, { stopActivity: true });
+    await workspaces.archiveSession({ sessionId, stopActivity: true });
   } catch (error) {
     const code = String(error?.rpcError?.code ?? error?.code ?? '');
     // 已经不在活会话里（用户先手删了）：当作归档成功，绑定照样清掉。

@@ -33,13 +33,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 ### Added
 
 - **删掉一条计划对话**：已计划过的任务行在「计划」旁多一个 `×`，点了走基座的工作区归档
-  （`workspaces.archiveSession`，与侧栏右键「归档」同一条通道）并清掉绑定；这一行回到未计划状态，
+  （`remote.workspaces.archiveSession`，与侧栏右键「归档」同一条通道）并清掉绑定；这一行回到未计划状态，
   再点「计划」是新建一条。host 路由 `POST /api/jira-work-overview/plan` 新增 `drop` 动作。
 - 计划要求的第 5 条：列完任务后必须用 `ask_user_question` 收尾（「按这份计划执行 / 我要修改计划」），
   确认只需点一下，不用打字。
 
 ### Fixed
 
+- **「×」报 `归档计划对话失败：no workspaces service`**：`ctx.get('workspaces')` 拿不到东西——注册表在
+  服务树上的名字是 `workspaceRegistry`（`dsh-workspace` 的 `super(ctx, "workspaceRegistry")`）。改走基座的
+  `remote.workspaces.archiveSession({ sessionId, stopActivity: true })`（与 `remote.session` 同一条遥控门面，
+  错误码也已翻成 `session/not-found` / `workspace/session-active`）。
 - 删掉计划对话后再点「计划」会打开那条已归档的会话：面板取绑定时带 `force: true`，
   host 只回映射、不再翻会话日志，另在 host 现建的路径上也带 `skipToken: true`。
 - **「计划」建会话改走 `sessions` 会话服务，不再直连 `remote.session`**：插件没在 `ctx.inject` 里声明

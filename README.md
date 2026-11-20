@@ -98,7 +98,7 @@ Prefer files? Add an override row to your profile's `cordis.patch.yml` (this is 
   `deepseek-ai/dsh-plan-mode`, its `section` is the planning policy, and without it the first message carries a
   built-in one ("plan only, list the changes, execute once the user agrees").
   A planned row also carries a `×`: it archives that conversation through DSH's own workspace archive
-  (`workspaces.archiveSession`, same path as the sidebar's *Archive`) and clears the binding, so the row is
+  (`remote.workspaces.archiveSession`, same path as the sidebar's *Archive`) and clears the binding, so the row is
   unplanned again and the next click starts a fresh session. Archiving keeps the log — a mis-click is
   recoverable from the archive.
 
