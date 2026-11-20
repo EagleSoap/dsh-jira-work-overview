@@ -32,6 +32,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Fixed
 
+- **「计划」不再要求 profile 里装 plan 模式插件**：点在没装 `@deepseek-ai/dsh-plan-mode`（或其 `section`
+  为空）的 profile 上会直接报「这个 profile 没有配置 plan 模式的工作方式」。现在口径按
+  settings 覆盖 → 面板宿主配置视图 → 靴子数据里的 profile 行依次取；都没有时由第一条消息自带一份
+  「只做规划、只列修改任务、敲定后再执行」的兜底口径，按钮照常建会话。
+- 「计划」首条消息的 `policy` 参数此前三处调用都没传，即使装了 plan 模式也一直走兜底文案。
 - `test/dsh-jira-status.mjs` 定位「筛选」按钮时会拿到同一行新加的「按迭代 / 按 epic」切换按钮
   （都是 `jmw-filterbtn`），改按 `aria-label` 认。
 - **从属关系视图：epic / 父任务，不靠画布。** 面板原先只有「项目 tab × sprint」一条线；现在每行额外带一行

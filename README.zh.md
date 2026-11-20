@@ -101,8 +101,9 @@ all    : assignee = currentUser() ORDER BY updated DESC
 一条任务**只对应一条**计划对话：已经计划过的任务按钮标成 `on`，再点只打开原来那条，不会又开一条。
 绑定存在插件的 volatile 配置 `planSessions` 里（一行一条 `ISSUE<TAB>sessionId`）；即使换了浏览器、
 清过配置，HOST 也会按计划对话首条消息里的 `JIRA_PLAN_SESSION:<KEY>` 标记翻会话日志把它找回来。
-项目没绑工作区（工作区右键 →「关联 Jira 项目…」）、或 profile 里没配 plan 模式
-（`deepseek-ai/dsh-plan-mode` 的 `section`）时，按钮会直接提示原因，不会建出半成品会话。
+项目没绑工作区（工作区右键 →「关联 Jira 项目…」）时，按钮会直接提示原因，不会建出半成品会话。
+profile 里装了 `deepseek-ai/dsh-plan-mode` 就用它的 `section` 当规划口径；没装也不影响使用——
+首条消息会自带一份「只做规划、只列修改任务、敲定后再执行」的兜底口径。
 
 **列表按 sprint（迭代）分组，每一组可折叠 / 展开**：
 

@@ -94,7 +94,9 @@ Prefer files? Add an override row to your profile's `cordis.patch.yml` (this is 
   unclear. One issue maps to one planning session: once bound the chip is highlighted, clicking it reopens the
   existing conversation (the binding lives in the volatile `planSessions` config as `ISSUE<TAB>sessionId`, and a
   lost binding is recovered from the `JIRA_PLAN_SESSION:<KEY>` marker in the session's first message). The button
-  reports what is missing when the project has no linked workspace or the profile has plan mode disabled.
+  reports what is missing when the project has no linked workspace; if the profile ships
+  `deepseek-ai/dsh-plan-mode`, its `section` is the planning policy, and without it the first message carries a
+  built-in one ("plan only, list the changes, execute once the user agrees").
 
 <img src="docs/images/panel-watch.png" width="1040" alt="The live-change banner and a row with its status dropdown open (To Do / In Progress / IN QA / Done)">
 
