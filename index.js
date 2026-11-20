@@ -245,6 +245,7 @@ const TEXT = {
     'config.language': '界面与工具输出用哪种语言：auto（跟随 DSH / 系统） / zh / en',
     'config.preferredEditor': '上次用来打开配置文件的编辑器 id（由面板写入，一般不用手改）',
     'config.apiToken': '旧版明文 token，首次加载会自动迁移进凭据库；迁移成功后请清空此项',
+    'config.projectWorkspaces': '项目 ↔ 工作区：每行「项目键<TAB>工作区 id」；面板的右键菜单会写这里，一般不用手改',
     // 注册期提示（通道没注册成功这类非致命问题）
     'note.noCommands': '未注册 /{name} 命令：这个 profile 没有 commands 服务。',
     'note.noCommandsError': '未注册 /{name} 命令：{message}',
@@ -255,6 +256,8 @@ const TEXT = {
     'note.noCredentialRouteError': '未注册令牌配置通道（{path}）：{message}',
     'note.noSettingsRoute': '未注册配置写入通道（{path}）：这个 profile 没有 connection.fetch 服务；仍可直接改 profile 的 cordis.patch.yml。',
     'note.noSettingsRouteError': '未注册配置写入通道（{path}）：{message}',
+    'note.noProjectWorkspaceRoute': '未注册「项目 ↔ 工作区」通道（{path}）：这个 profile 没有 connection.fetch 服务；仍可手改 profile 的 cordis.patch.yml。',
+    'note.noProjectWorkspaceRouteError': '未注册「项目 ↔ 工作区」通道（{path}）：{message}',
     'note.noRouteInject': '未能等待 connection 服务就绪（{message}），已改为立即注册 /api 通道。',
     'note.credUnavailable': '凭据服务不可用，{key} 仍从配置里的明文 token 读取。',
     'note.tokenMigrated': '已把配置里的明文 token 迁移进 DSH 凭据库（{key}），可以从插件配置里删除 apiToken 了。',
@@ -291,6 +294,9 @@ const TEXT = {
     'err.rejected': '这个邮箱 + 令牌的组合 Jira 不认（HTTP {status}）：{message}',
     'err.noWritableField': '没有可写入的字段。',
     'err.noSettingsService': '这个 profile 没有 settings 服务（或它没有挂 config-editor），配置无法持久化，只在本次运行内生效。',
+    'err.projectKey': '无效的项目键：「{project}」，应形如 APP / FTU。',
+    'err.projectWorkspaceId': '缺少工作区 id：没法把项目挂到工作区上。',
+    'err.projectWorkspaceAction': '不支持的项目 ↔ 工作区操作：{action}（只支持 link / unlink / clear）。',
     'err.openModeInvalid': '不支持的打开方式：{mode}（只支持 default / choose / reveal / app / custom）。',
     'err.patchPathUnknown': '这个 profile 的 cordis.patch.yml 路径不可用，无法打开。',
     'err.openFailed': '打开失败：{path}（{message}）',
@@ -413,6 +419,7 @@ const TEXT = {
     'config.language': 'Language for the UI and tool output: auto (follow DSH / system) / zh / en',
     'config.preferredEditor': 'Id of the editor most recently used to open the config file (written by the panel; you normally should not edit this)',
     'config.apiToken': 'Legacy plaintext token; migrated into the credential store on first load. Clear this field once the migration succeeds.',
+    'config.projectWorkspaces': 'Project to Workspace map: one "PROJECT<TAB>workspace id" per line, written by the panel context menu; you normally should not edit this',
     'note.noCommands': 'Did not register the /{name} command: this profile has no commands service.',
     'note.noCommandsError': 'Did not register the /{name} command: {message}',
     'note.noWatchRoute': 'Did not register the panel badge channel ({path}): this profile has no connection.fetch service; desktop notifications and background watching are unaffected.',
@@ -422,6 +429,8 @@ const TEXT = {
     'note.noCredentialRouteError': 'Did not register the token config channel ({path}): {message}',
     'note.noSettingsRoute': 'Did not register the settings write channel ({path}): this profile has no connection.fetch service; you can still edit the profile cordis.patch.yml directly.',
     'note.noSettingsRouteError': 'Did not register the settings write channel ({path}): {message}',
+    'note.noProjectWorkspaceRoute': 'Did not register the project-workspace channel ({path}): this profile has no connection.fetch service; you can still edit the profile cordis.patch.yml directly.',
+    'note.noProjectWorkspaceRouteError': 'Did not register the project-workspace channel ({path}): {message}',
     'note.noRouteInject': 'Could not wait for the connection service ({message}); registered the /api channels immediately.',
     'note.credUnavailable': 'Credential service unavailable; {key} is still read from the plaintext token in config.',
     'note.tokenMigrated': 'Migrated the plaintext token from config into the DSH credential store ({key}); you can remove apiToken from the plugin config now.',
@@ -456,6 +465,9 @@ const TEXT = {
     'err.rejected': 'Jira rejected this email + token combination (HTTP {status}): {message}',
     'err.noWritableField': 'No writable field.',
     'err.noSettingsService': 'This profile has no settings service (or it has no config-editor attached); the config cannot be persisted and applies only to this run.',
+    'err.projectKey': 'Invalid project key: "{project}"; expected something like APP or FTU.',
+    'err.projectWorkspaceId': 'Missing workspace id: cannot link a project to a workspace.',
+    'err.projectWorkspaceAction': 'Unsupported project-workspace action: {action} (only link / unlink / clear).',
     'err.openModeInvalid': 'Unsupported open mode: {mode} (only default / choose / reveal / app / custom are supported).',
     'err.patchPathUnknown': 'The cordis.patch.yml path of this profile is unavailable, so it cannot be opened.',
     'err.openFailed': 'Failed to open {path} ({message})',
@@ -673,6 +685,13 @@ export const Config = Schema.object({
     .default('')
     .volatile()
     .description(t('config.preferredEditor')),
+  // 项目 ↔ 工作区：一条记录一行「项目键 <TAB> 工作区 id」，多条用换行隔开（同一项目可挂多个工作区）。
+  // 存成一整串而不是对象：volatile 字段走设置覆盖，字符串数组/字典在 Loader 提交时形状随 patch 格式漂移。
+  // 工作区 id 由 DSH 生成（uuid，与路径无关，改名/移动目录都不失效）；前端通过下面那条路由读写。
+  projectWorkspaces: Schema.string()
+    .default('')
+    .volatile()
+    .description(t('config.projectWorkspaces')),
   apiToken: Schema.string()
     .default('')
     .description(t('config.apiToken')),
@@ -716,6 +735,8 @@ function registerApiRoutes(ctx, jira, settings) {
     registerCredentialRoute(routeCtx, jira, settings);
     // 面板「配置」里的后台监视表单（轮询开关 / 间隔 / 通知）走宿主 settings 服务写 volatile 字段。
     registerSettingsRoute(routeCtx, jira, settings);
+    // 项目 ↔ 工作区：面板右键菜单用它把某个项目挂到当前工作区。
+    registerProjectWorkspaceRoute(routeCtx, jira, settings);
   };
   if (typeof ctx?.inject === 'function') {
     try {
@@ -2266,6 +2287,10 @@ async function writeSettings(ctx, settings, patch) {
   if (typeof patch?.preferredEditor === 'string') {
     ops.push({ op: 'set', path: ['preferredEditor'], value: patch.preferredEditor.trim() });
   }
+  // 项目 ↔ 工作区映射（整串覆盖；空串 = 清空）。
+  if (typeof patch?.projectWorkspaces === 'string') {
+    ops.push({ op: 'set', path: ['projectWorkspaces'], value: patch.projectWorkspaces });
+  }
   const interval = Number(unwrapValue(patch?.watchIntervalMs));
   if (Number.isFinite(interval) && interval > 0) {
     ops.push({ op: 'set', path: ['watchIntervalMs'], value: Math.max(15000, Math.floor(interval)) });
@@ -2640,6 +2665,127 @@ async function openPatchFile(settings, mode, patchPath, jira, app) {
   const opened = { ok: true, mode: picked, patchPath: target };
   if (picked === 'app' || picked === 'custom') opened.app = appValue;
   return opened;
+}
+
+/* --------------------------------------------- 项目 ↔ 工作区 */
+//
+// 一个 Jira 项目可以挂到一个（或多个）DSH 工作区：面板按「当前工作区」自动落到对应项目的 tab。
+// 存的是工作区 **id**（DSH 生成的 uuid）而不是路径：工作区改名、目录搬家都不失效。
+// 一行一条 `PROJECT<TAB>workspaceId`，与 Config 的 projectWorkspaces 是同一个串。
+
+const PROJECT_WORKSPACE_PATH = '/api/jira-work-overview/project-workspace';
+
+/** 解析映射串（换行或逗号分隔，行内 项目键 与 工作区 id 用 tab / 逗号 / 空格分开）。 */
+function parseProjectWorkspaces(raw) {
+  const map = {};
+  const text = typeof raw === 'string' ? raw : '';
+  for (const line of text.split(/[\r\n,;]+/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const pair = trimmed.split(/[\t ]+/).filter(Boolean);
+    const project = String(pair[0] ?? '').trim().toUpperCase();
+    const workspaceId = String(pair[1] ?? '').trim();
+    if (!/^[A-Z][A-Z0-9_]*$/.test(project) || !workspaceId) continue;
+    // 去重：同一项目同一工作区只留一行；同一工作区也归到最后一个项目下（工作区是「一个地方」）。
+    for (const [other, ids] of Object.entries(map)) map[other] = ids.filter((id) => id !== workspaceId);
+    const next = new Set((map[project] ?? []).filter((id) => id !== workspaceId));
+    next.add(workspaceId);
+    map[project] = [...next];
+  }
+  return map;
+}
+
+/** 反向视图：工作区 id → 它挂着的项目键（按出现顺序）。 */
+function invertProjectWorkspaces(map) {
+  const owners = {};
+  for (const [project, ids] of Object.entries(map)) {
+    for (const workspaceId of ids) owners[workspaceId] = [...(owners[workspaceId] ?? []), project];
+  }
+  return owners;
+}
+
+/** 映射串的稳定写法：项目键升序，同一项目内保持原顺序。 */
+function serializeProjectWorkspaces(map) {
+  const lines = [];
+  for (const project of Object.keys(map).sort()) {
+    for (const workspaceId of map[project]) lines.push(`${project}\t${workspaceId}`);
+  }
+  return lines.join('\n');
+}
+
+/** 读「工作区 → 项目」映射：面板用它决定默认打开哪个项目的 tab。 */
+function projectWorkspacesView(settings) {
+  const raw = String(liveSetting(settings, 'projectWorkspaces', '') ?? '');
+  const map = parseProjectWorkspaces(raw);
+  return {
+    ok: true,
+    mapping: map,
+    workspaces: invertProjectWorkspaces(map),
+    items: Object.entries(map).flatMap(([project, ids]) => ids.map((workspaceId) => ({ project, workspaceId }))),
+  };
+}
+
+/**
+ * 写一次「项目 ↔ 工作区」。action：
+ * - `link`：把工作区挂到项目下（该工作区原来挂的项目一并让出）；
+ * - `unlink`：摘下某个项目下的工作区（缺省项目 = 摘下它的全部）；
+ * - `clear`：清空整个映射。
+ */
+async function mutateProjectWorkspace(ctx, settings, payload) {
+  const action = String(payload?.action ?? '').trim();
+  const workspaceId = String(payload?.workspaceId ?? '').trim();
+  const project = String(payload?.project ?? '').trim().toUpperCase();
+  const map = parseProjectWorkspaces(String(liveSetting(settings, 'projectWorkspaces', '') ?? ''));
+  if (action === 'clear') {
+    await writeSettings(ctx, settings, { projectWorkspaces: '' });
+    return projectWorkspacesView(settings);
+  }
+  if (action !== 'link' && action !== 'unlink') throw new Error(t('err.projectWorkspaceAction', { action: action || '-' }));
+  if (action === 'link') {
+    if (!/^[A-Z][A-Z0-9_]*$/.test(project)) throw new Error(t('err.projectKey', { project: payload?.project ?? '' }));
+    if (!workspaceId) throw new Error(t('err.projectWorkspaceId'));
+    for (const other of Object.keys(map)) map[other] = map[other].filter((id) => id !== workspaceId);
+    map[project] = [...new Set([...(map[project] ?? []), workspaceId])];
+  } else {
+    if (!workspaceId) throw new Error(t('err.projectWorkspaceId'));
+    const targets = project ? [project] : Object.keys(map);
+    for (const key of targets) {
+      if (!map[key]) continue;
+      map[key] = map[key].filter((id) => id !== workspaceId);
+      if (map[key].length === 0) delete map[key];
+    }
+  }
+  await writeSettings(ctx, settings, { projectWorkspaces: serializeProjectWorkspaces(map) });
+  return projectWorkspacesView(settings);
+}
+
+/** GET = 读映射；POST = link / unlink / clear。 */
+function registerProjectWorkspaceRoute(ctx, jira, settings) {
+  const registry = safeService(ctx, 'connection')?.fetch;
+  if (!registry || typeof registry.register !== 'function') {
+    jira.notes.push(t('note.noProjectWorkspaceRoute', { path: PROJECT_WORKSPACE_PATH }));
+    return;
+  }
+  try {
+    registry.register({
+      path: PROJECT_WORKSPACE_PATH,
+      methods: ['GET', 'POST'],
+      requestBody: 'buffered',
+      async fetch(request) {
+        const query = new URL(request.url).searchParams;
+        jira.useLang(query.get('lang'));
+        try {
+          if (request.method !== 'POST') return jsonResponse(projectWorkspacesView(settings));
+          const payload = await request.json().catch(() => ({}));
+          return jsonResponse(await mutateProjectWorkspace(ctx, settings, payload));
+        } catch (error) {
+          return jsonResponse({ ok: false, error: String(error?.message ?? error) }, 400);
+        }
+      },
+    });
+  } catch (error) {
+    jira.notes.push(t('note.noProjectWorkspaceRouteError', { path: PROJECT_WORKSPACE_PATH, message: error?.message ?? error }));
+  }
 }
 
 function registerSettingsRoute(ctx, jira, settings) {

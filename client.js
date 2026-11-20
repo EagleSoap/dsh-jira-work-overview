@@ -117,6 +117,17 @@ window.__ModuleLoader__.load({
         scopeOpen: '未完成',
         scopeSprint: '当前迭代',
         scopeAll: '全部',
+        // 项目 ↔ 工作区（左栏工作区右键菜单 + 会话行角标）。
+        wsLink: '关联 Jira 项目…',
+        wsUnlink: '取消关联 Jira 项目',
+        wsLinked: 'Jira 项目：{projects}',
+        wsBoundNote: '当前工作区已关联 {projects}',
+        wsShowProject: '只看 {project}',
+        wsNoProjects: '没有可关联的项目：面板里先拉到过 issue 才会出现项目候选。',
+        wsPickProject: '点上面的项目 tab，把它关联到当前工作区。',
+        wsLinkedToast: '已把 {project} 关联到当前工作区',
+        wsUnlinkedToast: '已取消 {project} 与当前工作区的关联',
+        wsFailed: '关联失败：{message}',
         projectAll: '全部项目',
         scopeTotal: '共 {count} 项',
         // 状态筛选（tab 行右侧的筛选按钮）。列表本身是虚拟列表，没有「正在渲染」进度了。
@@ -288,6 +299,17 @@ window.__ModuleLoader__.load({
         scopeOpen: 'Open',
         scopeSprint: 'Sprint',
         scopeAll: 'All',
+        // Project ↔ workspace (workspace context menu in the sidebar + session row chips).
+        wsLink: 'Link Jira project…',
+        wsUnlink: 'Unlink Jira project',
+        wsLinked: 'Jira projects: {projects}',
+        wsBoundNote: 'This workspace is linked to {projects}',
+        wsShowProject: 'Show {project} only',
+        wsNoProjects: 'No projects to link yet: open the panel once so the project list loads.',
+        wsPickProject: 'Click a project tab above to link it to the current workspace.',
+        wsLinkedToast: 'Linked {project} to this workspace',
+        wsUnlinkedToast: 'Unlinked {project} from this workspace',
+        wsFailed: 'Link failed: {message}',
         projectAll: 'All projects',
         scopeTotal: '{count} items',
         // Status filter (the button at the right of the tab row) and the progressive-render hint.
@@ -535,6 +557,13 @@ window.__ModuleLoader__.load({
       statuses: {},
       busyKey: '',
       flash: '',
+      // 工作区（DSH 的 Workspace）：当前会话的工作区 id、面板打开时按它做过的自动预选、以及有没有自动预选过。
+      // 会话 prompt 里的 @工作区 引用走的就是「会话属于某个工作区」，面板靠它把项目 tab 落到对应项目上。
+      workspaceId: '',
+      autoPicked: '',
+      autoPickedOnce: false,
+      // 用户在工作区右键菜单点了「关联 Jira 项目…」之后，正在等用户挑项目的那个工作区 id（空 = 不在挑）。
+      linkTarget: '',
     };
     const listeners = new Set();
     const runtime = { ctx: null };
@@ -981,6 +1010,152 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /* ------------------------------------------------ 项目 ↔ 工作区 */
+    //
+    // 一个 Jira 项目挂到一个工作区（工作区 = 一个项目目录），这样切到哪个工作区，
+    // 面板打开时就落在哪个项目的 tab 上。映射存在 host 的 volatile 配置 projectWorkspaces 里，
+    // 前端只读写、不另存一份：换机器 / 改插件都不会出现两份真相。
+    const PROJECT_WORKSPACE_PATH = '/api/jira-work-overview/project-workspace';
+    const workspaceLinks = { loaded: false, mapping: {}, workspaces: {} };
+
+    function patchWorkspaceLinks(next) {
+      if (!next || typeof next !== 'object') return;
+      const mapping = next.mapping && typeof next.mapping === 'object' ? next.mapping : {};
+      const inverted = next.workspaces && typeof next.workspaces === 'object' ? next.workspaces : {};
+      workspaceLinks.mapping = mapping;
+      workspaceLinks.workspaces = inverted;
+      workspaceLinks.loaded = true;
+      for (const listener of [...listeners]) listener();
+    }
+
+    async function fetchWorkspaceLinks(force = false) {
+      if (workspaceLinks.loaded && !force) return workspaceLinks;
+      try {
+        const response = await watchFetch(withLanguage(`${PROJECT_WORKSPACE_PATH}?t=${Date.now()}`));
+        const data = await response?.json?.().catch(() => undefined);
+        if (data && data.ok !== false) patchWorkspaceLinks(data);
+      } catch {
+        // 通道不可用不影响面板本身：只是「按工作区自动选项目」这一步不做。
+      }
+      return workspaceLinks;
+    }
+
+    async function mutateWorkspaceLinks(action, payload) {
+      const body = { action, ...payload };
+      const response = await watchFetch(withLanguage(PROJECT_WORKSPACE_PATH), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await response?.json?.().catch(() => undefined);
+      if (!data || data.ok === false) throw new Error(data?.error || `HTTP ${response?.status ?? '-'}`);
+      // 顺手把配置弹窗里那份 watch 视图刷新一下（映射也是 volatile 配置的一部分）。
+      patchWorkspaceLinks(data);
+      return data;
+    }
+
+    /** 某个工作区挂着的项目键（空格为止的第一段就是项目键）。 */
+    function projectsOfWorkspace(workspaceId) {
+      const ids = workspaceId ? workspaceLinks.workspaces[workspaceId] : undefined;
+      return Array.isArray(ids) ? ids : [];
+    }
+
+    /** 当前会话所属的工作区（读快照；没有 sessions 服务时返回 undefined）。 */
+    function currentWorkspaceView() {
+      const sessionId = currentSessionId();
+      if (!sessionId) return undefined;
+      const ctx = runtime.ctx;
+      const workspaces = ctx && typeof ctx.get === 'function' ? ctx.get('workspaces') : undefined;
+      try {
+        const items = workspaces?.list?.getSnapshot?.()?.items ?? [];
+        return items.find((row) => Array.isArray(row?.sessionIds) && row.sessionIds.includes(sessionId));
+      } catch {
+        return undefined;
+      }
+    }
+
+    function currentWorkspaceId() {
+      return currentWorkspaceView()?.workspaceId ?? '';
+    }
+
+    /**
+     * 切到工作区对应的项目 tab。只在「面板刚打开」与「用户在工作区上重新关联后」调用：
+     * 映射与工作区的读取都是异步的，别在渲染里调它（否则每次重渲染都可能把 tab 抢回来）。
+     */
+    function adoptWorkspaceProject(force = false) {
+      const workspaceId = currentWorkspaceId();
+      patch({ workspaceId });
+      const projects = projectsOfWorkspace(workspaceId);
+      const target = projects[0] ?? '';
+      patch({ autoPicked: target });
+      // force = 用户刚在这个工作区上点了「关联 / 取消关联」：那是明确意图，直接落过去。
+      // 否则每个会话只自动预选一次：用户之后手动切到别的 tab，重渲染不能再把 tab 抢回来。
+      if (!target) return;
+      if (!force && snapshot.autoPickedOnce) return;
+      patch({ autoPickedOnce: true });
+      // 搜索是整站范围，自动跳 tab 会把搜索结果过滤没；有搜索词时不动 tab。
+      if (snapshot.searchText || snapshot.project === target) return;
+      patch({ project: target, filterOpen: false, menuKey: '' });
+      load(snapshot.scope);
+    }
+
+    /** 把项目挂到工作区（面板 rail 在「待关联」状态下被点中）。 */
+    function linkWorkspaceProject(workspaceId, project) {
+      mutateWorkspaceLinks('link', { workspaceId, project })
+        .then(() => {
+          patch({ linkTarget: '', project, autoPicked: project, autoPickedOnce: true });
+          flash(t('wsLinkedToast', { project }));
+        })
+        .catch((error) => flash(t('wsFailed', { message: String(error?.message ?? error) })));
+    }
+
+    /** 面板里那行「本工作区已关联 X」：只在自动预选/跳转过时出现（autoPicked 空串 = 本工作区没关联）。 */
+    function boundProjectOfWorkspace(workspaceId) {
+      if (!workspaceId) return '';
+      const projects = projectsOfWorkspace(workspaceId);
+      if (!projects.length) return '';
+      return projects.includes(snapshot.autoPicked) ? snapshot.autoPicked : '';
+    }
+
+    /** 面板顶部那一行「工作区 ↔ 项目」说明（没有可说的就不占位置）。 */
+    function renderWorkspaceNotice() {
+      const state = snapshot;
+      if (state.linkTarget) {
+        const candidates = projectCandidates();
+        return h('div', { key: 'ws-notice', className: 'jmw-ws-notice' }, [
+          h('span', { key: 'text', className: 'jmw-ws-notice-text' },
+            candidates.length ? t('wsPickProject') : t('wsNoProjects')),
+          h('button', {
+            key: 'cancel',
+            type: 'button',
+            className: 'jmw-linkbtn',
+            onClick: () => patch({ linkTarget: '' }),
+          }, t('statusCancel')),
+        ]);
+      }
+      const bound = boundProjectOfWorkspace(state.workspaceId);
+      if (!bound) return null;
+      return h('div', { key: 'ws-notice', className: 'jmw-ws-notice' }, [
+        h('span', { key: 'text', className: 'jmw-ws-notice-text' }, t('wsBoundNote', { projects: bound })),
+        state.project === bound
+          ? null
+          : h('button', {
+            key: 'show',
+            type: 'button',
+            className: 'jmw-linkbtn',
+            onClick: () => patch({ project: bound, filterOpen: false, menuKey: '' }),
+          }, t('wsShowProject', { project: bound })),
+      ]);
+    }
+
+    /** 项目候选：面板当前数据里出现过的项目键 + 映射里已经写下的键（去重、排序、不含「全部」）。 */
+    function projectCandidates() {
+      const keys = new Set();
+      for (const tab of projectTabs(snapshot.data)) if (tab.key !== 'ALL') keys.add(tab.key);
+      for (const key of Object.keys(workspaceLinks.mapping)) keys.add(key);
+      return [...keys].sort();
+    }
+
     /* -------------------------------------------------------------- 分组 */
 
     function fallbackGroups(items) {
@@ -1334,6 +1509,19 @@ window.__ModuleLoader__.load({
 .jmw-cred-msg.err{color:var(--dsw-alias-state-error-primary,#d64545)}
 .jmw-cred-link{font-size:12px;color:var(--dsw-alias-link,#4d6bfe)}
 /* 项目切换：可横向滚动的 tab 条 + 左右滚动按钮 */
+/* 工作区 ↔ 项目：会话行角标、hover 卡片一行、面板里的提示条与「待关联」tab */
+.jmw-ws-badge{flex:none;font-size:10.5px;line-height:16px;padding:0 6px;border-radius:999px;
+  color:var(--dsw-alias-brand-primary,#4d6bfe);background:color-mix(in srgb,var(--dsw-alias-brand-primary,#4d6bfe) 12%,transparent);
+  border:1px solid color-mix(in srgb,var(--dsw-alias-brand-primary,#4d6bfe) 30%,transparent)}
+.jmw-ws-hover{font-size:12px;line-height:1.6;color:var(--dsw-alias-label-secondary,#5c6270)}
+.jmw-ws-notice{display:flex;align-items:center;gap:8px;padding:4px 18px 0;font-size:12px;
+  color:var(--dsw-alias-label-secondary,#5c6270)}
+.jmw-ws-notice-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.jmw-linkbtn{flex:none;font:inherit;font-size:12px;padding:2px 8px;cursor:pointer;border-radius:var(--dsw-radius-sm,8px);
+  color:var(--dsw-alias-brand-primary,#4d6bfe);background:transparent;
+  border:1px solid color-mix(in srgb,var(--dsw-alias-brand-primary,#4d6bfe) 35%,transparent)}
+.jmw-linkbtn:hover{background:color-mix(in srgb,var(--dsw-alias-brand-primary,#4d6bfe) 10%,transparent)}
+.jmw-pill.target{outline:2px dashed color-mix(in srgb,var(--dsw-alias-brand-primary,#4d6bfe) 55%,transparent);outline-offset:1px}
 .jmw-projects{display:flex;align-items:center;gap:6px;padding:0 18px 4px}
 .jmw-scrollbtn{flex:none;width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;
   padding:0;font:inherit;font-size:15px;line-height:1;cursor:pointer;border-radius:var(--dsw-radius-sm,8px);
@@ -1454,15 +1642,105 @@ window.__ModuleLoader__.load({
         'aria-label': t('title'),
         onClick() {
           const open = !snapshot.open;
-          patch({ open, credOpen: false, menuKey: '', filterOpen: false });
+          patch({ open, credOpen: false, menuKey: '', filterOpen: false, autoPickedOnce: false });
           // 打开时若还没有数据、或上次是错误（例如当时没有会话），就顺手重试一次。
           if (open && (snapshot.error || !snapshot.data) && !snapshot.loading) load(snapshot.scope);
+          // 工作区 ↔ 项目：打开面板时按当前会话的工作区把 tab 落到关联项目上（只做这一次，之后以用户选择为准）。
+          if (open) {
+            const p = fetchWorkspaceLinks().then(() => adoptWorkspaceProject());
+            p.catch(() => undefined);
+          }
         },
       }, [
         h(JiraGlyph, { key: 'glyph', size: 18 }),
         narrow ? null : h('span', { key: 'label', className: 'jmw-entry-label' }, t('title')),
         unread > 0 ? h('span', { key: 'badge', className: 'jmw-entry-badge' }, unread > 99 ? '99+' : String(unread)) : null,
       ]);
+    }
+
+    /**
+     * 左栏「工作区」那一行右键菜单里的条目：把某个 Jira 项目关联到这个工作区。
+     * Structured menu（ctx.contextMenus, target: 'workspace'）：不是 React 组件，
+     * 所以「选哪个项目」交给面板顶部的 rail 去挑 —— 菜单条目先把候选项目写进请求，
+     * 再打开面板：只有一个候选就直接落，多个就在 rail 上标出来让用户点。
+     */
+    function projectMenuEntry(workspace) {
+      const workspaceId = String(workspace?.workspaceId ?? '');
+      return {
+        id: 'jira-project',
+        label: t('wsLink'),
+        run: () => {
+          // 打开面板，并在项目 tab 条上把候选项目标成「待关联」：点哪个项目就挂到哪个工作区。
+          patch({ open: true, credOpen: false, menuKey: '', filterOpen: false, autoPickedOnce: false, linkTarget: workspaceId });
+          if (!snapshot.data && !snapshot.loading) load(snapshot.scope);
+          void fetchWorkspaceLinks(true);
+        },
+      };
+    }
+
+    /** 工作区上已关联的项目：菜单里给一条「取消关联」（只放第一条，多个项目在面板 rail 里逐个取消）。 */
+    function projectUnlinkEntry(workspace) {
+      const workspaceId = String(workspace?.workspaceId ?? '');
+      const projects = projectsOfWorkspace(workspaceId);
+      if (!projects.length) return undefined;
+      return {
+        id: 'jira-unlink',
+        label: t('wsUnlink'),
+        run: () => {
+          const project = projects[0];
+          mutateWorkspaceLinks('unlink', { workspaceId, project })
+            .then(() => { flash(t('wsUnlinkedToast', { project })); adoptWorkspaceProject(true); })
+            .catch((error) => flash(t('wsFailed', { message: String(error?.message ?? error) })));
+        },
+      };
+    }
+
+    /** 会话行角标：这个会话所在工作区关联了哪些项目（只读，不绑定会话）。 */
+    function WorkspaceBadge(props) {
+      useSnapshot();
+      const sessionId = String(props?.sessionId ?? '');
+      const workspace = workspaceOfSessionIn(useSessionSnapshot(), sessionId);
+      const projects = workspace ? projectsOfWorkspace(workspace.workspaceId) : [];
+      if (!projects.length) return null;
+      return h('span', {
+        key: 'jira',
+        className: 'jmw-ws-badge',
+        title: t('wsLinked', { projects: projects.join(', ') }),
+      }, projects.join(', '));
+    }
+
+    /** 会话 hover 卡片里的一行：工作区关联的 Jira 项目。 */
+    function WorkspaceHoverLine(props) {
+      useSnapshot();
+      const sessionId = String(props?.sessionId ?? '');
+      const workspace = workspaceOfSessionIn(useSessionSnapshot(), sessionId);
+      const projects = workspace ? projectsOfWorkspace(workspace.workspaceId) : [];
+      if (!projects.length) return null;
+      return h('div', { key: 'jira', className: 'jmw-ws-hover' }, t('wsLinked', { projects: projects.join(', ') }));
+    }
+
+    function useSessionSnapshot() {
+      const ctx = runtime.ctx;
+      const sessions = ctx && typeof ctx.get === 'function' ? ctx.get('sessions') : undefined;
+      const [value, setValue] = React.useState(() => {
+        try { return sessions?.list?.getSnapshot?.() ?? null; } catch { return null; }
+      });
+      React.useEffect(() => {
+        if (!sessions?.list?.subscribe) return undefined;
+        let live = true;
+        const update = () => { if (live) setValue(sessions.list.getSnapshot() ?? null); };
+        const off = sessions.list.subscribe?.(update);
+        update();
+        return () => { live = false; if (typeof off === 'function') off(); };
+      }, []);
+      return value;
+    }
+
+    /** 同 workspaceOfSession，但读的是已经拿到的快照（渲染期用，避免每次渲染都 subscribe）。 */
+    function workspaceOfSessionIn(sessionState, sessionId) {
+      const items = sessionState?.items;
+      if (!Array.isArray(items) || !sessionId) return undefined;
+      return items.find((row) => Array.isArray(row?.sessionIds) && row.sessionIds.includes(sessionId));
     }
 
     function watchStatus(state) {
@@ -1690,6 +1968,8 @@ window.__ModuleLoader__.load({
       // 关面板 = 连所有浮层一起关：否则下次点开入口会「列表 + 配置」两个弹窗叠着出现。
       // 搜索框不算浮层（它在标题栏里，和项目 tab / 状态筛选一样跨开关保留），所以不在这里收。
       const closeAll = () => patch({ open: false, credOpen: false, menuKey: '', filterOpen: false });
+      // 正在等工作区挑项目（左栏工作区右键 →「关联 Jira 项目…」）：非空时项目 tab 变成「点一下就挂上去」。
+      const linkTarget = typeof state.linkTarget === 'string' ? state.linkTarget : '';
 
       // 搜索：放大镜就在标题栏原位，点开后在同一个位置向左展开输入框、失焦收回按钮。
       // 草稿（searchDraft）与已生效的搜索词（searchText）分开：回车才切词并清空输入框；
@@ -2058,6 +2338,8 @@ window.__ModuleLoader__.load({
             onClick: () => closeAll(),
           }, h(CloseGlyph)),
         ]),
+        // 关联提示：正在挑项目 / 本工作区已关联某个项目（面板刚按它跳过来）时各给一行说明。
+        renderWorkspaceNotice(),
         // tab 行：项目 tab（左滚 / 条 / 右滚）+ 状态筛选 + 展开全部 / 折叠全部。
         // 范围分段控件（未完成 / 全部）与它右侧的总数已删（用户 2026-11-18）：范围固定为 all，
         // 总数移到标题下的副标题，「展开 / 折叠全部」从原来的第二行挪到这里。
@@ -2076,11 +2358,13 @@ window.__ModuleLoader__.load({
             h('div', { key: 'strip', className: 'jmw-projectstrip', ref: stripRef }, tabs.map((tab) => h('button', {
               key: tab.key,
               type: 'button',
-              className: `jmw-pill${tab.key === project ? ' on' : ''}`,
+              className: `jmw-pill${tab.key === project ? ' on' : ''}${linkTarget && tab.key !== 'ALL' ? ' target' : ''}`,
               'aria-pressed': tab.key === project ? 'true' : 'false',
+              title: linkTarget && tab.key !== 'ALL' ? t('wsLinked', { projects: tab.key }) : undefined,
               // 切项目 tab：数据已经全在手里，不需要重新查询，也没有「分批画」的状态要重置；
               // 滚动位置由 Panel 里的一个 effect 统一拉回顶部（换 tab / 换筛选都会）。
-              onClick: () => patch({ project: tab.key }),
+              // 正在等挑项目时，点项目 tab = 把该项目挂到那个工作区（选中态也一起切过去）。
+              onClick: linkTarget && tab.key !== 'ALL' ? () => linkWorkspaceProject(linkTarget, tab.key) : () => patch({ project: tab.key }),
             }, h('span', { key: 'name', className: 'jmw-pillname' }, tab.key === 'ALL' ? t('projectAll') : tab.key)))),
             tabs.length > 1
               ? h('button', {
@@ -2870,6 +3154,47 @@ window.__ModuleLoader__.load({
           locale: NS,
           label: () => t('credTitle'),
         }, CredentialSettings));
+
+        // 左栏「工作区」行的右键菜单：关联 / 取消关联 Jira 项目。
+        // 结构化菜单是抽象贡献（不是 React 组件），只能在 ctx.contextMenus 上注册（dsh-client-ui-context-menu）。
+        const contextMenus = typeof ctx.get === 'function' ? ctx.get('contextMenus') : undefined;
+        if (contextMenus && typeof contextMenus.register === 'function') {
+          try {
+            ctx.effect?.(() => contextMenus.register({
+              id: `${PLUGIN_ID}.workspace-project`,
+              target: 'workspace',
+              order: 500,
+              observe: () => [runtime.ctx && ctx.get('workspaces') ? ctx.get('workspaces').list : undefined].filter(Boolean),
+              resolve: (target) => {
+                const entries = [projectMenuEntry(target)];
+                const unlink = projectUnlinkEntry(target);
+                if (unlink) entries.push(unlink);
+                return entries;
+              },
+            }), `${NS}: workspace project menu`);
+          } catch (error) {
+            console.warn(`${NS}: workspace menu unavailable`, error);
+          }
+        }
+
+        // 侧栏会话行：角标（工作区关联的项目）与 hover 卡片一行。两个都是可选的洞，缺了不影响面板。
+        ctx.slots.inject('sidebar.session.row.trailing', () => ctx.slots.register({
+          name: 'sidebar.session.row.trailing',
+          id: ENTRY_ID,
+          order: 40,
+          locale: NS,
+          label: () => t('wsLinked', { projects: 'Jira' }),
+        }, WorkspaceBadge));
+        ctx.slots.inject('sidebar.session.row.hover', () => ctx.slots.register({
+          name: 'sidebar.session.row.hover',
+          id: ENTRY_ID,
+          order: 40,
+          locale: NS,
+          label: () => t('wsLinked', { projects: 'Jira' }),
+        }, WorkspaceHoverLine));
+
+        // 映射要开局就有一份：会话行角标、面板开头的「本工作区」都读它。
+        void fetchWorkspaceLinks();
 
         startWatchLoop(ctx);
       },

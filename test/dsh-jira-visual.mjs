@@ -1049,8 +1049,9 @@ try {
     return undefined;
   });
   modNoVirtual.apply(clientCtx);
-  const lastEntry = slotRegistrations.filter((row) => row.options.id === 'jira-work-overview').at(-1).component;
-  const lastPanel = slotRegistrations.filter((row) => row.options.id === 'jira-work-overview-panel').at(-1).component;
+  // 按插槽名取：会话行上的角标 / hover 也用同一个 id，光按 id 会取错组件。
+  const lastEntry = slotRegistrations.filter((row) => row.options.name === 'sidebar.footer.action').at(-1).component;
+  const lastPanel = slotRegistrations.filter((row) => row.options.name === 'shell.overlay').at(-1).component;
   currentComponent = 'Entry';
   hookIndex = 0;
   collect(expand(createElement(lastEntry, { wide: true })), (row) => row.type === 'button')[0].props.onClick();
