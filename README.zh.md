@@ -78,6 +78,8 @@ all    : assignee = currentUser() ORDER BY updated DESC
 输入框**失焦（或按 Esc）就收回按钮**：没回车的草稿下次展开还在；回车执行后输入框清空、结果保留；
 `×` 清空搜索并回到「我的工作」。
 
+<img src="docs/images/panel-search.zh.png" width="1040" alt="面板里搜索「结算」：标题栏输入框展开着，副标题显示「搜索：结算 共 4 项」，命中按迭代分组，行下带 epic 从属关系">
+
 <img src="docs/images/panel-watch.zh.png" width="1040" alt="实时变更横幅与展开的状态流转下拉（待办 / 进行中 / IN QA / 已完成）">
 
 **查询范围固定为全部**（`assignee = currentUser()`，含已完成 / 已关闭）：原来的「未完成 / 全部」分段控件已按用户
@@ -107,9 +109,16 @@ all    : assignee = currentUser() ORDER BY updated DESC
 profile 里装了 `deepseek-ai/dsh-plan-mode` 就用它的 `section` 当规划口径；没装也不影响使用——
 首条消息会自带一份「只做规划、只列修改任务、敲定后再执行」的兜底口径。
 
+<img src="docs/images/panel-plan.zh.png" width="1040" alt="任务行末尾的「☰ 计划」徽标：上面两行已计划、被框起来，其余行未计划">
+
 **删掉一条计划对话**：已计划过的任务行在「计划」旁边多一个 `×`，点它就调基座的工作区归档
 （依次尝试 `remote.workspace.archiveSession` / 工作区注册表 `workspaceRegistry.archiveSession` / `connection.call('workspace/archiveSession')`，与侧栏右键「归档」是同一处状态）把那条会话收进归档区，同时清掉绑定；
 归档后这一行回到未计划状态，再点「计划」是新建一条。归档不删日志，误删可以从归档区恢复。
+
+**按 epic 分组**：标题栏的 **按迭代 / 按 epic** 开关把同一批数据换一条线分组——按 Epic Link 归组，横跨多个项目的组在组头标出「N 个项目」，
+每行下面仍带自己的 `↳ epic APP-123`，等于不画图也能看到一个层级。
+
+<img src="docs/images/panel-epic.zh.png" width="1040" alt="同一列表按 epic 分组：三组，其中一组横跨两个项目，每行下面带 epic 从属关系行">
 
 **列表按 sprint（迭代）分组，每一组可折叠 / 展开**：
 
@@ -445,8 +454,10 @@ ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-shot.mjs         # 重新生成 docs
 
 `test/dsh-jira-shot.mjs` 出的图和这套离线脚本同源：**真 `client.js` 组件 + 真插件 CSS + 固定的一套虚构 APP/OPS 工作项**，
 序列化成静态 HTML 后交给无头 Chrome 截图，所以图上不会出现任何真实站点、账号或 issue。
-参数：`--lang en,zh`（默认两个都出）、`--theme dark`（默认浅色，深色加 `-dark` 后缀）、`--only panel|panel-watch|sidebar-entry`、`--out <目录>`；
-找不到 Chrome 时打印 `SKIP:` 并以 0 退出。
+每条 issue 都带 epic（`APP-300` / `OPS-60`）或父任务，所以图上的 `↳ epic …` 行一定在场；
+出图前会在无头 Chrome 里**按真 CSS 量一遍行高**再重排，组头与带 `↳` 的行因此落在浏览器里的真实位置。
+参数：`--lang en,zh`（默认两个都出）、`--theme dark`（默认浅色，深色加 `-dark` 后缀）、
+`--only panel|panel-plan|panel-watch|panel-search|panel-epic|sidebar-entry`、`--out <目录>`；找不到 Chrome 时打印 `SKIP:` 并以 0 退出。
 
 约定与坑：
 

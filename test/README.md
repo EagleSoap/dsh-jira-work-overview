@@ -37,8 +37,10 @@ ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-shot.mjs --theme dark       # writes
 ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-shot.mjs --only panel-watch
 ```
 
-- The data is a fixed set of **made-up** APP/OPS issues (`demoPayload()`), so a shot can never leak a real site, account or issue summary — the empty theme variables fall back to the plugin's own colours if `app.asar` cannot be read.
-- `--lang en,zh`, `--theme light|dark`, `--only panel|panel-watch|sidebar-entry`, `--out <dir>` (default `docs/images`). Chrome is looked up at `/Applications/Google Chrome.app/…` (override with `DSH_JIRA_CHROME`); without it the script prints `SKIP:` and exits 0.
+- The data is a fixed set of **made-up** APP/OPS issues (`demoPayload()`), so a shot can never leak a real site, account or issue summary — the empty theme variables fall back to the plugin's own colours if `app.asar` cannot be read. Every issue carries an epic (`APP-300` / `OPS-60`) or a parent, so the `↳ epic …` line is always on screen.
+- Shots: `panel` (sprint grouping + `↳` lines + `☰ Plan` chips), `panel-plan` (two bound rows, `×` visible), `panel-watch` (change banner + status dropdown), `panel-search` (drives the real magnifier → field → Enter path and asserts the command面 got `--search=`), `panel-epic` (the real *By epic* toggle; asserts three group heads), `sidebar-entry`.
+- Row heights before shooting: the virtualizer stand-in starts from `estimateSize()` (32px), then `measureRows()` renders the whole list in headless Chrome, reads the real `.jmw-vrow` heights (real CSS decides), writes them back and re-renders — the same order the real library measures rows in. So group heads / rows with a `↳` line land exactly where the browser puts them.
+- `--lang en,zh`, `--theme light|dark`, `--only panel|panel-plan|panel-watch|panel-search|panel-epic|sidebar-entry`, `--out <dir>` (default `docs/images`). Chrome is looked up at `/Applications/Google Chrome.app/…` (override with `DSH_JIRA_CHROME`); without it the script prints `SKIP:` and exits 0.
 - Inside the page CSS it neutralizes the panel's full-screen mask (`.jmw-mask{position:absolute;background:transparent}`) and drops a fake sidebar rail behind `sidebar-entry`, so the shots read as product UI rather than a floating overlay.
 
 ## Environment

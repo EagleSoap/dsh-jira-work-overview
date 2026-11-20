@@ -83,6 +83,8 @@ Prefer files? Add an override row to your profile's `cordis.patch.yml` (this is 
 
 - **Project tabs** (with `‹ ›` scrolling) filter by issue-key prefix; **status filter** is single-select, defaults to "all statuses".
 - **Search**: the header magnifier expands in place into a field that slides out to the left; type a keyword or an issue key and press **Enter**. The query runs against all of Jira (not only your issues); matches are grouped by sprint like your own list, with the same project tabs / status filter / total. Losing focus (or **Esc**) collapses the field back to the button and keeps an unsubmitted draft; a submitted query clears the field and keeps the results, and `×` clears the search to return to your work.
+
+  <img src="docs/images/panel-search.png" width="1040" alt="A search for 'checkout' inside the panel: the header field is open, the subtitle reads 'Search: checkout 4 items', and the hits are grouped by sprint with their epic line and the same filters as the work list">
 - The header shows the **accurate total** for the current project + status, straight from Jira's `approximate-count`.
 - Click a **status chip** on any row to move the issue; the list reloads. **Esc** closes the top-most layer (status menu → configure dialog → panel).
 - The list is **virtualized**: thousands of rows scroll smoothly because only the visible ones are in the DOM.
@@ -102,7 +104,15 @@ Prefer files? Add an override row to your profile's `cordis.patch.yml` (this is 
   unplanned again and the next click starts a fresh session. Archiving keeps the log — a mis-click is
   recoverable from the archive.
 
+<img src="docs/images/panel-plan.png" width="1040" alt="Rows with the '☰ Plan' chip: the two planned rows near the top are outlined because they are bound to a planning conversation, the rest are not">
+
 <img src="docs/images/panel-watch.png" width="1040" alt="The live-change banner and a row with its status dropdown open (To Do / In Progress / IN QA / Done)">
+
+### Epic view
+
+The **By sprint / By epic** switch in the header re-groups the same list. Each group is an Epic Link (or "No epic"), a group that spans several projects is labelled with its project count, and every row keeps its `↳ epic APP-123` line — one level of Jira's own hierarchy, no free-form graph to maintain.
+
+<img src="docs/images/panel-epic.png" width="1040" alt="The same list grouped by epic: three groups, one of them spanning two projects, with each row's epic line underneath">
 
 ### Slash command
 
@@ -211,7 +221,7 @@ ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-status.mjs      # real Jira (skips i
 ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-shot.mjs        # regenerate docs/images (headless Chrome, fake data)
 ```
 
-The screenshots are generated offline too: `test/dsh-jira-shot.mjs` renders the real `client.js` components with the real plugin CSS and a fixed set of **made-up** APP/OPS issues, serializes them to static HTML and lets headless Chrome shoot them — so the images never contain a real site, account or issue. Run it with `--lang en,zh`, `--theme dark`, `--only panel|panel-watch|sidebar-entry` or `--out <dir>`; it prints `SKIP:` and exits 0 when no Chrome is installed.
+The screenshots are generated offline too: `test/dsh-jira-shot.mjs` renders the real `client.js` components with the real plugin CSS and a fixed set of **made-up** APP/OPS issues, serializes them to static HTML and lets headless Chrome shoot them — so the images never contain a real site, account or issue. Run it with `--lang en,zh`, `--theme dark`, `--only panel|panel-plan|panel-watch|panel-search|panel-epic|sidebar-entry` or `--out <dir>`; it prints `SKIP:` and exits 0 when no Chrome is installed.
 
 The host half imports `@deepseek-ai/schemastery`, which only resolves inside the app, so the suites copy `index.js` next to a copy of that dependency in a temp dir (`DSH_JIRA_TMP` overrides the location). Real-Jira suites read a token from `DSH_JIRA_ENV_FILE` (default `$TMP/.dsh_jira_env`, `chmod 600`) and **skip** when Jira is unreachable instead of reporting a false regression.
 
