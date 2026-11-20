@@ -10,6 +10,7 @@
 ##   - 不要设 NPM_CONFIG_PROVENANCE=false：公开仓库自动带 provenance
 ##   - 发布用 npm@11（>= 11.5.1 才支持 OIDC）；npm@12 的 --provenance 是坏的
 ##   - 本插件零构建、无依赖、无 lockfile：不要加 npm ci / npm install
+##   - 验证步骤必须轮询：npm publish 返回后包还在 processing，几秒内 registry 对版本 URL 回 404
 name: Publish
 
 on:
@@ -68,13 +69,14 @@ jobs:
         run: npm publish --access public
 
       - name: Verify the registry actually serves this version
-        # 发布"看起来成功"什么都证明不了：版本上线、latest 指向它、shasum 与本地打包一致才算数
+        # 发布"看起来成功"什么都证明不了：版本上线、latest 指向它、shasum 与本地打包一致才算数。
+        # npm 的 `publish` 返回 "+ pkg@x.y.z" 只代表收下了：包还在 processing，几秒内 registry 会对
+        # 这个版本回 404（v0.16.0 就是 1.6s 后去查，E404 把整个 run 标红，而包其实上线了）。
+        # 所以这里轮询等它出现（最多 ~2 分钟），并用 curl 直接读 registry 文档——`npm view` 会撞旧缓存。
         run: |
-          set -euo pipefail
+          set -uo pipefail
           PKG="$(node -p "require('./package.json').name")"
           VERSION="$(node -p "require('./package.json').version")"
-          echo "::group::npm view $PKG@$VERSION dist.shasum"
-          REG_SHASUM="$(npm view "$PKG@$VERSION" dist.shasum)"
           LOCAL_SHASUM="$(node -e '
             const { createHash } = require("node:crypto")
             const { readFileSync, readdirSync } = require("node:fs")
@@ -82,16 +84,33 @@ jobs:
             const f = readdirSync(dir).find(n => n.endsWith(".tgz"))
             console.log(createHash("sha1").update(readFileSync(require("node:path").join(dir, f))).digest("hex"))
           ' "$RUNNER_TEMP")"
+          META=""
+          for attempt in $(seq 1 24); do
+            META="$(curl -fsS "https://registry.npmjs.org/$PKG/$VERSION" 2>/dev/null || true)"
+            if [ -n "$META" ]; then
+              echo "registry serves $PKG@$VERSION (attempt $attempt)"
+              break
+            fi
+            echo "attempt $attempt: $PKG@$VERSION not served yet (still processing), waiting 5s"
+            sleep 5
+          done
+          if [ -z "$META" ]; then
+            echo "::error::$PKG@$VERSION is still not on the registry after $((attempt * 5))s of polling"
+            exit 1
+          fi
+          echo "::group::dist of $PKG@$VERSION"
+          node -e 'const j = JSON.parse(process.argv[1]); console.log(JSON.stringify({ shasum: j.dist.shasum, integrity: j.dist.integrity, fileCount: j.dist.fileCount, unpackedSize: j.dist.unpackedSize }, null, 2))' "$META"
+          REG_SHASUM="$(node -p 'JSON.parse(process.argv[1]).dist.shasum' "$META")"
           echo "registry=$REG_SHASUM  local=$LOCAL_SHASUM"
           echo "::endgroup::"
           if [ "$REG_SHASUM" != "$LOCAL_SHASUM" ]; then
             echo "::error::shasum mismatch — the registry is not serving the tarball we packed"
             exit 1
           fi
-          echo "::group::dist-tags"
-          npm view "$PKG" dist-tags
-          echo "::endgroup::"
-          LATEST="$(npm view "$PKG" dist-tags.latest)"
+          # dist-tag 只在包文档（不带版本号的那个 URL）里有，latest 指到新版本才算发布完成
+          PACKUMENT="$(curl -fsS "https://registry.npmjs.org/$PKG" || true)"
+          LATEST="$(node -e 'try { console.log(JSON.parse(process.argv[1])["dist-tags"].latest) } catch { console.log("<unreadable>") }' "$PACKUMENT")"
+          echo "dist-tags.latest=$LATEST"
           if [ "$LATEST" != "$VERSION" ]; then
             echo "::error::dist-tags.latest is $LATEST, expected $VERSION"
             exit 1
