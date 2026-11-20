@@ -296,6 +296,9 @@ window.__ModuleLoader__.load({
         patchOpenedApp: '已交给 {app} 打开',
         // 任务行后面的「计划」按钮：在绑定的工作区里开一个 plan 模式会话
         planButton: '计划',
+        planDrop: '删除这条计划对话（归档，卡片回到未计划）',
+        planDropped: '{key} 的计划对话已删除',
+        planDropFailed: '删除计划对话失败：{message}',
         planBusy: '该任务正在建计划对话…',
         planNoWorkspace: '项目 {project} 还没有绑定工作区：先在左侧侧栏里把项目挂到工作区。',
         planFailed: '创建计划对话失败：{message}',
@@ -306,10 +309,16 @@ window.__ModuleLoader__.load({
         planRules: '要求：\n1. 只汇报「将要执行的修改任务」，按点列出，不写解释、背景、分析或实现细节；\n'
           + '2. 计划由用户确认或修改之后才执行，不要先动手改任何东西；\n'
           + '3. 如果这张 Jira 卡信息不全、问题不明确，不要猜也不要开始执行：直接中断，并告诉用户「Jira 任务不明确，无法进行任务」，说明缺了什么；\n'
-          + '4. 有需要用户补充的信息，就在计划末尾一次问清楚。',
+          + '4. 有需要用户补充的信息，就在计划末尾一次问清楚；\n'
+          + '5. 列完修改任务之后，必须调用一次 ask_user_question 把计划交给用户定夺（不要用纯文字问）：'
+          + '问题设为「按这份计划开始执行吗？」，选项依次是「按这份计划执行」与「我要修改计划」；'
+          + '用户选「我要修改计划」时，按用户填的理由改计划并重新提问，不要开始执行。',
       },
       en: {
         planButton: 'Plan',
+        planDrop: 'Delete this planning session (archive it; the issue goes back to unplanned)',
+        planDropped: 'Deleted the planning session for {key}',
+        planDropFailed: 'Could not delete the planning session: {message}',
         planBusy: 'Creating the planning session…',
         planNoWorkspace: 'Project {project} is not linked to a workspace: link it from the sidebar first.',
         planFailed: 'Could not create the planning session: {message}',
@@ -320,7 +329,10 @@ window.__ModuleLoader__.load({
         planRules: 'Rules:\n1. Report only the changes you intend to make, as a bullet list; no explanation, background, analysis or implementation detail;\n'
           + '2. Do not execute anything until the user approves or edits the plan;\n'
           + '3. If this Jira issue is incomplete or the problem is unclear, do not guess and do not start: stop and tell the user the Jira issue is unclear so the task cannot proceed, and say what is missing;\n'
-          + '4. Ask for anything you still need from the user, once, at the end of the plan.',
+          + '4. Ask for anything you still need from the user, once, at the end of the plan;\n'
+          + '5. After listing the changes, always call ask_user_question once to hand the plan over for a decision '
+          + '(never ask in plain text): ask "Start with this plan?" with the options "Start with this plan" and '
+          + '"I want to change the plan"; if the user picks the latter, revise the plan and ask again — do not start.',
         title: 'My Jira work items',
         loading: 'Loading…',
         empty: 'No matching work items',
@@ -1323,7 +1335,9 @@ window.__ModuleLoader__.load({
         }
         // 2) 本地没记：host 按首条消息里的标记搜一遍会话日志（换了浏览器 / 清过配置也能找回）。
         //    搜索只是优化，读失败不能挡住新建——那就退一步当没搜到。
-        const found = await postPlan({ action: 'search', issue: key })
+        //    `force`: 本地映射里没有这张卡的记录，说明用户（或别的窗口）刚把它删掉了；
+        //    这时宿主那边若还记得，可能只是它还没落盘，别把已归档的那条又翻出来。
+        const found = await postPlan({ action: 'search', issue: key, force: true })
           .then((data) => data.sessionId)
           .catch(() => '');
         if (typeof found === 'string' && found) {
@@ -1355,8 +1369,10 @@ window.__ModuleLoader__.load({
               issue: key,
               workspaceId,
               // 不传 sessionId：让 host 现建一条。刚才那条半成品不接管，界面上也不会冒出空的闲会话。
+              // skipToken 同上：前面已经搜过一次，别再按标记把刚删掉的那条翻出来。
               policy,
               instruction: planMessage(item, policy),
+              skipToken: true,
             }).catch(() => undefined);
             if (!fallback?.sessionId) throw error;
             openPlanSession(fallback.sessionId);
@@ -1370,12 +1386,34 @@ window.__ModuleLoader__.load({
           workspaceId,
           policy,
           instruction: planMessage(item, policy),
+          // 前端那边没搜到（比如刚亲手删掉的那条），host 建会话时就别再按标记去翻一次日志：
+          // 否则会撞上同一条已归档的旧会话，建也建不了、开也开不了。
+          skipToken: true,
         });
         if (!created?.sessionId) throw new Error(t('planNoSession'));
         openPlanSession(created.sessionId);
         flash(t('planCreated', { key }));
       } catch (error) {
         patch({ planError: t('planFailed', { message: String(error?.message ?? error) }) });
+      } finally {
+        planRun.busy = false;
+        patch({ planBusy: '' });
+      }
+    }
+
+    /**
+     * 删掉一条计划对话：交给 host 归档（与侧栏右键「归档」同一条通道），再把绑定清掉。
+     * 不做「二次确认」弹窗——会话还在归档区里，误删也能从那里恢复。
+     */
+    async function dropPlan(item) {
+      if (planRun.busy) return;
+      planRun.busy = true;
+      patch({ planBusy: item.key, planError: '' });
+      try {
+        await postPlan({ action: 'drop', issue: item.key });
+        flash(t('planDropped', { key: item.key }));
+      } catch (error) {
+        patch({ planError: t('planDropFailed', { message: String(error?.message ?? error) }) });
       } finally {
         planRun.busy = false;
         patch({ planBusy: '' });
@@ -1798,6 +1836,11 @@ window.__ModuleLoader__.load({
 .jmw-row:hover .jmw-badge.act.plan,.jmw-badge.act.plan.on,.jmw-badge.act.plan:focus-visible{opacity:1}
 .jmw-badge.act.plan:disabled{opacity:.45;cursor:default}
 .jmw-planicon{font-size:10px;line-height:1}
+/* 「删掉这条计划对话」：只在已绑定时出现，弱化成一个小叉，避免和「计划」抢注意力。 */
+.jmw-badge.act.plan-drop{opacity:0;padding:0 5px;font-size:11px;line-height:1;color:var(--dsw-alias-text-tertiary,rgba(0,0,0,.45))}
+.jmw-row:hover .jmw-badge.act.plan-drop,.jmw-badge.act.plan-drop:focus-visible{opacity:.8}
+.jmw-badge.act.plan-drop:hover{opacity:1;color:var(--dsw-alias-state-danger,rgba(200,45,45,.95))}
+.jmw-badge.act.plan-drop:disabled{opacity:.3;cursor:default}
 .jmw-badge.act.on{color:var(--dsw-alias-brand-primary,#4d6bfe);border-color:var(--dsw-alias-brand-primary,rgba(77,107,254,.5));
   background:var(--dsw-alias-state-info-bg,rgba(77,107,254,.08))}
 .jmw-caret{font-size:9px;line-height:1;opacity:.7}
@@ -2357,6 +2400,22 @@ window.__ModuleLoader__.load({
         h('span', { key: 'icon', className: 'jmw-planicon', 'aria-hidden': true }, '☰'),
         h('span', { key: 'text' }, planning ? t('planBusy') : t('planButton')),
       ]));
+      // 已绑定才有「删」：归档那条会话并解绑，任务回到「没计划过」。
+      if (hasPlan) {
+        meta.push(h('button', {
+          key: 'plan-drop',
+          type: 'button',
+          className: 'jmw-badge act plan-drop',
+          title: t('planDrop'),
+          'aria-label': t('planDrop'),
+          disabled: planning || Boolean(snapshot.planBusy),
+          onClick: (event) => {
+            event?.preventDefault?.();
+            event?.stopPropagation?.();
+            void dropPlan(item);
+          },
+        }, '×'));
+      }
       const classes = ['jmw-row'];
       if (item.category === 'done') classes.push('done');
       if (open) classes.push('open');

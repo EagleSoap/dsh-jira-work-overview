@@ -30,8 +30,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
     「只汇报 / 不明确就中断」两条规则、二次点击不新建、按标记找回、缺口清单、参数报错、面板按钮与
     `on` 状态。
 
+### Added
+
+- **删掉一条计划对话**：已计划过的任务行在「计划」旁多一个 `×`，点了走基座的工作区归档
+  （`workspaces.archiveSession`，与侧栏右键「归档」同一条通道）并清掉绑定；这一行回到未计划状态，
+  再点「计划」是新建一条。host 路由 `POST /api/jira-work-overview/plan` 新增 `drop` 动作。
+- 计划要求的第 5 条：列完任务后必须用 `ask_user_question` 收尾（「按这份计划执行 / 我要修改计划」），
+  确认只需点一下，不用打字。
+
 ### Fixed
 
+- 删掉计划对话后再点「计划」会打开那条已归档的会话：面板取绑定时带 `force: true`，
+  host 只回映射、不再翻会话日志，另在 host 现建的路径上也带 `skipToken: true`。
 - **「计划」建会话改走 `sessions` 会话服务，不再直连 `remote.session`**：插件没在 `ctx.inject` 里声明
   `remote`，真机上一点就抛 `cannot get property "remote.session" without inject`。现在用基座客户端常驻的
   `sessions.create({ workspaceId })` 建会话，再用 `sessions.using(id, …)` 拿会话对象、依次 `command('/plan')`

@@ -1,0 +1,98 @@
+## 推 tag 即发布到 npm：npm 通过 OIDC 信任本 workflow，不需要任何 token，也不需要两步验证码。
+## 绑定信息（一次性）：npmjs.com → 包 → Settings → Trusted publishing
+##   Publisher: GitHub Actions · Organization: EagleSoap · Repository: dsh-jira-work-overview
+##   Workflow filename: publish.yml · Environment name: 留空 · Allowed actions: Allow npm publish
+##
+## 改这个文件时别破坏：
+##   - 文件名必须与 npm 侧「Workflow filename」逐字符一致：publish.yml
+##   - id-token: write 是 OIDC 的唯一硬要求，删掉就退化成需要 token
+##   - 不要设 registry-url / NODE_AUTH_TOKEN：空的 token 会挡住 OIDC 发布
+##   - 不要设 NPM_CONFIG_PROVENANCE=false：公开仓库自动带 provenance
+##   - 发布用 npm@11（>= 11.5.1 才支持 OIDC）；npm@12 的 --provenance 是坏的
+##   - 本插件零构建、无依赖、无 lockfile：不要加 npm ci / npm install
+name: Publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  id-token: write # OIDC：npm 据此确认「是本人授权的 workflow」
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      npm_config_registry: 'https://registry.npmjs.org'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          # 不要加 registry-url：它会写一个空的 NODE_AUTH_TOKEN，挡住 OIDC
+
+      - name: Upgrade npm (OIDC needs >= 11.5.1)
+        run: |
+          npm install -g npm@11
+          node --version
+          npm --version
+
+      - name: Verify the tag matches package.json
+        # 只在 tag 推送时校验；手动触发时 GITHUB_REF_NAME 是分支名，比了必然不等
+        if: github.event_name == 'push'
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          echo "package.json=$PKG_VERSION  tag=$TAG_VERSION"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+
+      - name: Pack (the tarball we must see on the registry)
+        run: |
+          npm pack --pack-destination "$RUNNER_TEMP"
+          ls -l "$RUNNER_TEMP"
+
+      - name: Publish to npm
+        run: npm publish --access public
+
+      - name: Verify the registry actually serves this version
+        # 发布"看起来成功"什么都证明不了：版本上线、latest 指向它、shasum 与本地打包一致才算数
+        run: |
+          set -euo pipefail
+          PKG="$(node -p "require('./package.json').name")"
+          VERSION="$(node -p "require('./package.json').version")"
+          echo "::group::npm view $PKG@$VERSION dist.shasum"
+          REG_SHASUM="$(npm view "$PKG@$VERSION" dist.shasum)"
+          LOCAL_SHASUM="$(node -e '
+            const { createHash } = require("node:crypto")
+            const { readFileSync, readdirSync } = require("node:fs")
+            const dir = process.argv[1]
+            const f = readdirSync(dir).find(n => n.endsWith(".tgz"))
+            console.log(createHash("sha1").update(readFileSync(require("node:path").join(dir, f))).digest("hex"))
+          ' "$RUNNER_TEMP")"
+          echo "registry=$REG_SHASUM  local=$LOCAL_SHASUM"
+          echo "::endgroup::"
+          if [ "$REG_SHASUM" != "$LOCAL_SHASUM" ]; then
+            echo "::error::shasum mismatch — the registry is not serving the tarball we packed"
+            exit 1
+          fi
+          echo "::group::dist-tags"
+          npm view "$PKG" dist-tags
+          echo "::endgroup::"
+          LATEST="$(npm view "$PKG" dist-tags.latest)"
+          if [ "$LATEST" != "$VERSION" ]; then
+            echo "::error::dist-tags.latest is $LATEST, expected $VERSION"
+            exit 1
+          fi

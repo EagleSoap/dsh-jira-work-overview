@@ -97,6 +97,10 @@ Prefer files? Add an override row to your profile's `cordis.patch.yml` (this is 
   reports what is missing when the project has no linked workspace; if the profile ships
   `deepseek-ai/dsh-plan-mode`, its `section` is the planning policy, and without it the first message carries a
   built-in one ("plan only, list the changes, execute once the user agrees").
+  A planned row also carries a `×`: it archives that conversation through DSH's own workspace archive
+  (`workspaces.archiveSession`, same path as the sidebar's *Archive`) and clears the binding, so the row is
+  unplanned again and the next click starts a fresh session. Archiving keeps the log — a mis-click is
+  recoverable from the archive.
 
 <img src="docs/images/panel-watch.png" width="1040" alt="The live-change banner and a row with its status dropdown open (To Do / In Progress / IN QA / Done)">
 

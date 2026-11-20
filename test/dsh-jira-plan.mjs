@@ -77,6 +77,9 @@ const jiraCalls = [];
 /* ------------------------------------------------------- host 侧服务桩 */
 
 const settingsWrites = [];
+/* 「删掉计划对话」走的是基座的归档通道：记录调用，必要时模拟基座拒收。 */
+const archiveCalls = [];
+let archiveRefuses = false;
 const registeredRoutes = [];
 let settingsRaw = {
   projectWorkspaces: 'APP\tws-uuid-1',
@@ -92,6 +95,18 @@ const hostCtx = {
     }
     if (name === 'remote') return remoteService;
     if (name === 'agents') return { list: () => sessions.map((session) => ({ id: session.id, session })) };
+    if (name === 'workspaces') {
+      return {
+        async archiveSession(sessionId, options) {
+          archiveCalls.push({ sessionId, stopActivity: options?.stopActivity === true });
+          if (archiveRefuses) {
+            const error = new Error(`cannot archive session '${sessionId}'`);
+            error.code = 'workspace/session-active';
+            throw error;
+          }
+        },
+      };
+    }
     if (name === 'settings') {
       return {
         describe: () => [{ ns: 'jira-work-overview', revision: 1 }],
@@ -232,6 +247,25 @@ check(Array.isArray(unclear.gaps) && unclear.gaps.length >= 3, '列出缺口（�
 const unclearText = remoteCalls.filter((call) => call.call === 'prompt').map((call) => call.text).find((text) => text.includes('APP-2')) ?? '';
 check(/不明确/.test(unclearText) && /缺/.test(unclearText), '首条消息要求中断并说明缺什么', unclearText.split('\n').filter((line) => /不明确|缺/.test(line)).join(' / '));
 
+/* ------------------------------------------------------------- 删掉计划对话 */
+
+// 归档先失败：绑定必须原样留着，否则面板会以为没计划过、再点又开一条新的。
+archiveRefuses = true;
+const refused = await planPayload({ action: 'drop', issue: 'APP-1' });
+syncWrites();
+console.log('\n场景 5（删掉已绑定的计划对话）');
+check(refused.ok === false && /归档|archive/i.test(String(refused.error)), '归档失败 → 明确报错', refused.error);
+check(String(settingsRaw.planSessions).includes('APP-1'), '归档失败时绑定保留（卡片仍显示已绑定）', JSON.stringify(settingsRaw.planSessions));
+
+archiveRefuses = false;
+const dropped = await planPayload({ action: 'drop', issue: 'APP-1' });
+syncWrites();
+check(dropped.ok === true, '归档成功 → 返回 ok', JSON.stringify({ ok: dropped.ok, sessionId: dropped.sessionId }));
+check(archiveCalls.some((call) => call.sessionId === created.sessionId && call.stopActivity === true), '用基座 workspaces.archiveSession 归档（带 stopActivity）', JSON.stringify(archiveCalls.slice(-1)));
+check(!String(settingsRaw.planSessions).includes('APP-1'), '归档后绑定被删除（卡片回到未计划）', JSON.stringify(settingsRaw.planSessions));
+const dropAgain = await planPayload({ action: 'drop', issue: 'APP-1' });
+check(dropAgain.ok === false && /绑定|bound/i.test(String(dropAgain.error)), '对没绑定的卡再删 → 明确报错', dropAgain.error);
+
 /* ------------------------------------------------------------- 场景 5 */
 
 const noWorkspace = await planPayload({ action: 'create', issue: 'APP-1' });
@@ -311,12 +345,14 @@ function collectText(node) {
 const M = {
   zh: {
     planButton: '计划',
+    planDrop: '删除这条计划对话',
+    planDropped: '{key} 的计划对话已删除',
     planBusy: '该任务正在建计划对话…',
     planNoWorkspace: '项目 {project} 还没有绑定工作区',
     planCreated: '已为 {key} 建好计划对话',
     planOpened: '{key} 已有计划对话，已为你打开',
     planIssueLine: '任务：{key} {summary}\n链接：{url}',
-    planRules: '要求：\n1. 只汇报「将要执行的修改任务」',
+    planRules: '要求：\n1. 只汇报「将要执行的修改任务」\n5. 必须调用一次 ask_user_question，问题「按这份计划开始执行吗？」，选项「按这份计划执行」与「我要修改计划」',
   },
 };
 
@@ -337,6 +373,8 @@ Object.defineProperty(globalThis, 'navigator', { value: { language: 'zh-CN' }, c
 const clientRoutes = [];
 const clientJobs = [];
 const clientPlanSessions = { sessions: {} };
+/* 面板点「×」后应当走 host 的 drop：这里记下被删掉的会话 id。 */
+const clientArchived = [];
 /* 面板看到的那批卡片；后面加一张，验证「没装 plan 模式插件」时的二次点击。 */
 const clientListItems = [{
   key: 'APP-1', project: 'APP', summary: '登录页加「记住我」', status: 'To Do', category: 'new',
@@ -353,11 +391,25 @@ const fakeWindow = {
       clientRoutes.push({ path, method: String(init?.method ?? 'GET').toUpperCase(), body: init?.body ? JSON.parse(init.body) : null });
       const json = (payload) => ({ ok: true, status: 200, async json() { return payload; } });
       if (path === '/api/jira-work-overview/project-workspace') return json({ ok: true, mapping: { APP: ['ws-uuid-1'] }, workspaces: { 'ws-uuid-1': ['APP'] }, items: [] });
+      // 映射的 GET：真 host 每次都给当前状态（删掉之后就是空的），别让面板残留旧的绑定。
+      if (path === '/api/jira-work-overview/plan' && String(init?.method ?? 'GET').toUpperCase() === 'GET') {
+        return json({ ok: true, sessions: { ...clientPlanSessions.sessions } });
+      }
       if (path === '/api/jira-work-overview/plan') {
         // 真 host 的每次回应都带着当前映射：这里照着做（link 之后 APP-1 就绑到 sess-client-1）。
         const body = init?.body ? JSON.parse(init.body) : {};
         if (body.action === 'link' && body.sessionId) clientPlanSessions.sessions[body.issue] = body.sessionId;
-        return json({ ok: true, sessions: { ...clientPlanSessions.sessions }, sessionId: '' });
+        // drop = 基座归档会话 + 删掉绑定（真 host 的顺序：先归档、后解绑）。
+        if (body.action === 'drop' && clientPlanSessions.sessions[body.issue]) {
+          clientArchived.push(clientPlanSessions.sessions[body.issue]);
+          delete clientPlanSessions.sessions[body.issue];
+        }
+        // `force: true` = 面板自己都没有这条绑定了（刚删掉 / 换过浏览器）：宿主只回映射、不翻日志。
+        if (body.action === 'search' && body.force === true) {
+          return json({ ok: true, sessions: { ...clientPlanSessions.sessions }, sessionId: '', bound: clientPlanSessions.sessions[body.issue] ?? '' });
+        }
+        const bound = clientPlanSessions.sessions[body.issue];
+        return json({ ok: true, sessions: { ...clientPlanSessions.sessions }, sessionId: bound ?? '' });
       }
       // 角标长轮询：像真宿主那样压久一点再回，否则循环空转会把事件循环饿死。
       await new Promise((resolve) => setTimeout(resolve, 200));
@@ -517,7 +569,8 @@ function collectButtons(node) {
   walk(node, (row) => { if (row.type === 'button') hits.push(row); });
   return hits;
 }
-const planButtonsOf = (node) => collectButtons(node).filter((row) => /jmw-badge act plan/.test(String(row.props.className ?? '')));
+/* 只看「计划」本体：已绑定的行后面还有一个「删掉计划对话」的小叉（`act plan-drop`），不能算进来。 */
+const planButtonsOf = (node) => collectButtons(node).filter((row) => /\bact plan\b(?!-)/.test(String(row.props.className ?? '')));
 let tree = render();
 for (let i = 0; i < 60 && planButtonsOf(tree).length === 0; i += 1) {
   await new Promise((resolve) => setTimeout(resolve, 25));
@@ -545,10 +598,39 @@ check(Boolean(clientPrompt?.requestId), 'prompt 带 requestId（宿主据此去�
 check(String(clientPrompt?.content?.[0]?.text ?? '').startsWith('JIRA_PLAN_SESSION:APP-1'), '面板投递的首条消息同样带任务标记');
 check(clientOpened.includes('sess-client-1'), '建好后在主视图打开它', clientOpened.join(','));
 
+/* 已绑定的行后面多一个「×」：点它 = 走 host 的 drop（归档 + 解绑）。 */
+const dropButton = () => collectButtons(render()).find((row) => /act plan-drop/.test(String(row.props?.className ?? '')));
+check(Boolean(dropButton()), '已绑定的任务行有「删掉计划对话」按钮', dropButton()?.props?.className);
+await dropButton()?.props?.onClick?.({ preventDefault() {}, stopPropagation() {} });
+/* 等的是面板自己那一步落定（按钮变回未绑定的样子），不是等映射文件——映射在点下去那一刻就清了。 */
+for (let i = 0; i < 60 && Boolean(dropButton()); i += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 25));
+}
+/* 再点「计划」：删除时那条会话带着刚落下的提示，先等它完全静止，别和新建抢同一个 busy。 */
+await settle(() => false);
+const dropCall = [...clientRoutes].reverse().find((row) => row.path === '/api/jira-work-overview/plan' && row.body?.action === 'drop');
+check(Boolean(dropCall) && dropCall.body.issue === 'APP-1', '点「×」走 host 的 drop（归档那条会话并解绑）', JSON.stringify(dropCall?.body ?? null));
+check(clientArchived.includes('sess-client-1'), '被删的是原来那条计划对话', clientArchived.join(','));
+// 删完要能重新计划：再点一次「计划」应当新建一条（而不是打开已归档的那条）。
+const beforeRecreate = clientRemoteCalls.filter((call) => call.call === 'create').length;
+await planButtonsOf(render())[0].props.onClick({ preventDefault() {}, stopPropagation() {} });
+for (let i = 0; i < 60 && clientRemoteCalls.filter((call) => call.call === 'create').length === beforeRecreate; i += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 25));
+}
+const createdAfter = clientRemoteCalls.filter((call) => call.call === 'create').length;
+check(createdAfter > beforeRecreate, '删掉之后再点「计划」是新建一条，不是打开旧的', `${beforeRecreate} → ${createdAfter} | 归档 ${clientArchived.join(',')}`);
+// 收尾：把这条也删掉，后面「没装 plan 模式」的场景从「未绑定」开始。
+await collectButtons(render()).find((row) => /act plan-drop/.test(String(row.props?.className ?? '')))?.props?.onClick?.({ preventDefault() {}, stopPropagation() {} });
+for (let i = 0; i < 60 && Object.keys(clientPlanSessions.sessions).length > 0; i += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 25));
+}
+
 const planButtonNow = planButtonsOf(tree)[0];
 check(String(planButtonNow?.props?.className ?? '').includes(' on'), '该任务已经有计划对话 → 按钮标成已绑定（on）');
 const firstPlanText = String(clientPrompt?.content?.[0]?.text ?? '');
 check(firstPlanText.includes(profilePlanSection), '首条消息带上 profile 里配的 plan 模式口径', firstPlanText);
+// 计划列完之后要交给用户一键确认：用原生问答工具收尾，而不是让用户自己组织一段回复。
+check(firstPlanText.includes('ask_user_question') && firstPlanText.includes('按这份计划执行'), '首条消息要求用 ask_user_question 收尾，提供「执行 / 要改」两个选项', firstPlanText.split('\n').filter((line) => /ask_user_question/.test(line)).join(' / ').slice(0, 160));
 
 
 /* ------------------------------------------------ 没装 dsh-plan-mode 的 profile */

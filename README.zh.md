@@ -107,6 +107,10 @@ all    : assignee = currentUser() ORDER BY updated DESC
 profile 里装了 `deepseek-ai/dsh-plan-mode` 就用它的 `section` 当规划口径；没装也不影响使用——
 首条消息会自带一份「只做规划、只列修改任务、敲定后再执行」的兜底口径。
 
+**删掉一条计划对话**：已计划过的任务行在「计划」旁边多一个 `×`，点它就调基座的工作区归档
+（`workspaces.archiveSession`，与侧栏右键「归档」同一条通道）把那条会话收进归档区，同时清掉绑定；
+归档后这一行回到未计划状态，再点「计划」是新建一条。归档不删日志，误删可以从归档区恢复。
+
 **列表按 sprint（迭代）分组，每一组可折叠 / 展开**：
 
 - 排序：**按 sprint id 从新到旧**，「无迭代」永远垫底。刻意**不**按 Jira 的 sprint 状态（active/future）

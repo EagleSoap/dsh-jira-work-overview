@@ -316,7 +316,9 @@ const TEXT = {
     'err.projectWorkspaceId': '缺少工作区 id：没法把项目挂到工作区上。',
     'err.planIssue': '无效的 issue key：「{issue}」，应形如 APP-3489。',
     'err.planWorkspaceId': '缺少工作区 id：计划对话要建在项目绑定的工作区里。',
-    'err.planAction': '不支持的计划对话操作：{action}（只支持 link / unlink / clear）。',
+    'err.planAction': '不支持的计划对话操作：{action}（支持 create / search / link / unlink / drop / clear）。',
+    'err.planUnbound': '{key} 没有绑定计划对话：没有可归档的会话。',
+    'err.planArchive': '归档计划对话失败：{message}',
     'err.planSession': '缺少会话 id：没法把计划对话绑定到任务上。',
     'err.planSearch': '按任务搜计划对话失败：{message}',
     'err.planCreate': '创建计划对话失败：{message}',
@@ -334,6 +336,7 @@ const TEXT = {
     'plan.gap.context': '父任务、关联任务都没有，看不出要做成什么样',
     'plan.gap.untitled': '（无标题）',
     'note.planMode': '计划对话没能进入 plan 模式：{message}',
+    'note.planSearch': '建计划对话前按标记搜会话日志失败（改为直接新建）：{message}',
     'note.planPersist': '计划对话的绑定没能写进配置（只在本次运行内有效）：{message}',
     'err.projectWorkspaceAction': '不支持的项目 ↔ 工作区操作：{action}（只支持 link / unlink / clear）。',
     'err.openModeInvalid': '不支持的打开方式：{mode}（只支持 default / choose / reveal / app / custom）。',
@@ -513,7 +516,9 @@ const TEXT = {
     'err.projectWorkspaceId': 'Missing workspace id: cannot link a project to a workspace.',
     'err.planIssue': 'Invalid issue key: "{issue}"; expected a key such as APP-3489.',
     'err.planWorkspaceId': 'Missing workspace id: a planning session must live in the project\'s linked workspace.',
-    'err.planAction': 'Unsupported planning-session action: {action} (only link / unlink / clear).',
+    'err.planAction': 'Unsupported planning-session action: {action} (create / search / link / unlink / drop / clear).',
+    'err.planUnbound': '{key} has no bound planning session: nothing to archive.',
+    'err.planArchive': 'Could not archive the planning session: {message}',
     'err.planSession': 'Missing session id: cannot bind a planning session to the issue.',
     'err.planSearch': 'Searching session logs for the planning session failed: {message}',
     'err.planCreate': 'Could not create the planning session: {message}',
@@ -530,6 +535,7 @@ const TEXT = {
     'plan.gap.context': 'no parent or linked issue, so the intended outcome is not visible',
     'plan.gap.untitled': '(untitled)',
     'note.planMode': 'The planning session did not enter plan mode: {message}',
+    'note.planSearch': 'Searching the session log for an existing planning session failed (creating a new one instead): {message}',
     'note.planPersist': 'The planning-session binding could not be written to the config (applies to this run only): {message}',
 
     'err.projectWorkspaceAction': 'Unsupported project-workspace action: {action} (only link / unlink / clear).',
@@ -3108,7 +3114,18 @@ async function createPlanSession(ctx, jira, payload, key) {
   const remote = safeService(ctx, 'remote');
   const sessionApi = remote?.session;
   if (!sessionApi || typeof sessionApi.create !== 'function') throw new Error(t('err.planCreate', { message: 'no remote service' }));
-  const created = await sessionApi.create({ workspaceId });
+
+  // 建之前按标记搜一次会话日志：本地映射丢了（换了浏览器、清过配置）时，找回原来那条接着投递，
+  // 而不是又开一条。`skipToken` = 调用方（面板）已经搜过、并且确定刚才那条不让再用（比如刚删掉）。
+  let reused = '';
+  if (payload?.skipToken !== true && typeof findPlanSessionByToken === 'function') {
+    try {
+      reused = String((await findPlanSessionByToken(ctx, key)) ?? '');
+    } catch (error) {
+      jira.notes.push(t('note.planSearch', { message: String(error?.message ?? error) }));
+    }
+  }
+  const created = reused ? { sessionId: reused } : await sessionApi.create({ workspaceId });
   const sessionId = String(created?.sessionId ?? '');
   if (!sessionId) throw new Error(t('err.planCreate', { message: 'no sessionId' }));
 
@@ -3161,6 +3178,34 @@ async function createPlanSession(ctx, jira, payload, key) {
 }
 
 /** GET = 读映射；POST = search（按标记找已有会话）/ link / unlink / clear / create（整条流程）。 */
+/**
+ * 归档一条计划对话，并把这张卡在 planSessions 里的绑定删掉。
+ *
+ * 「删」在 DSH 里就是**归档**（`workspaces.archiveSession`，与侧栏右键「归档」同一个通道）——
+ * 不能在磁盘上手删：会话日志是唯一真相，工作区的归档集合与项目缓存都要由基座一起更新。
+ * 先归档、后解绑：归档失败就保留绑定，卡片仍是「已绑定」，再点还是打开原来那条。
+ */
+async function dropPlanSession(ctx, settings, key) {
+  const map = parsePlanSessions(String(liveSetting(settings, 'planSessions', '') ?? ''));
+  const sessionId = String(map[key] ?? '');
+  if (!sessionId) throw new Error(t('err.planUnbound', { key }));
+  const workspaces = safeService(ctx, 'workspaces');
+  if (!workspaces || typeof workspaces.archiveSession !== 'function') {
+    throw new Error(t('err.planArchive', { message: 'no workspaces service' }));
+  }
+  try {
+    // stopActivity：规划对话此刻没在跑就是空操作；正在跑就一并停下，否则基座会拒收。
+    await workspaces.archiveSession(sessionId, { stopActivity: true });
+  } catch (error) {
+    const code = String(error?.rpcError?.code ?? error?.code ?? '');
+    // 已经不在活会话里（用户先手删了）：当作归档成功，绑定照样清掉。
+    if (code !== 'session/not-found') throw new Error(t('err.planArchive', { message: String(error?.message ?? error) }));
+  }
+  delete map[key];
+  await writeSettings(ctx, settings, { planSessions: serializePlanSessions(map) });
+  return { sessionId };
+}
+
 function registerPlanRoute(ctx, jira, settings) {
   const registry = safeService(ctx, 'connection')?.fetch;
   if (!registry || typeof registry.register !== 'function') {
@@ -3186,6 +3231,12 @@ function registerPlanRoute(ctx, jira, settings) {
           }
           if (action === 'search') {
             const key = requireIssueKey(payload);
+            // `force`: 面板那边本地映射里没有这张卡了（刚删掉 / 换过浏览器），这时不能再把它
+            // 找回来——宿主记着的绑定可能只是还没落盘。只回当前的映射，不去翻日志。
+            if (payload?.force === true) {
+              const map = parsePlanSessions(String(liveSetting(settings, 'planSessions', '') ?? ''));
+              return jsonResponse({ ...planSessionsView(settings), sessionId: '', bound: String(map[key] ?? '') });
+            }
             let sessionId = '';
             try {
               sessionId = await findPlanSessionByToken(ctx, key);
@@ -3201,6 +3252,10 @@ function registerPlanRoute(ctx, jira, settings) {
           if (action === 'clear') {
             await writeSettings(ctx, settings, { planSessions: '' });
             return jsonResponse(planSessionsView(settings));
+          }
+          if (action === 'drop') {
+            const dropped = await dropPlanSession(ctx, settings, key);
+            return jsonResponse({ ...planSessionsView(settings), sessionId: dropped.sessionId });
           }
           if (action !== 'link' && action !== 'unlink') throw new Error(t('err.planAction', { action: action || '-' }));
           if (action === 'link') {
