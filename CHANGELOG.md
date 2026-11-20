@@ -8,6 +8,32 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Added
 
+- **任务行的「计划」按钮：在项目绑定的工作区里开一条 plan 模式会话。** 每条任务末尾多一个 `☰ 计划`，
+  点一下就在该项目关联的工作区里新建一条会话，先 `/plan` 再把这单任务投给它——第一条消息只要求
+  「列出将要执行的修改任务」，由用户在对话里敲定或修改；已经计划过的任务按钮标成已绑定（`on`），
+  再点只打开原来那条，不会重复建。Jira 卡信息不全（没有标题 / 描述 / 父任务与关联）时，第一条消息会
+  明确要求中断并提示「Jira 任务不明确，无法进行任务」，并列出缺什么。
+  - **一条任务只对应一条计划对话**：绑定存在 volatile 配置 `planSessions`（一行一条
+    `ISSUE<TAB>sessionId`）。本地映射丢了（换浏览器、清过配置）也不要紧——每条计划对话的第一条消息
+    都带 `JIRA_PLAN_SESSION:<KEY>` 标记，host 直接翻会话日志找它并补回绑定；会话日志是唯一真相，
+    配置只是它的缓存。
+  - 没绑工作区、profile 里没配 plan 模式（`deepseek-ai/dsh-plan-mode` 的 `section`）时直接报错说明，
+    不建半成品会话；刚建出来的会话在宿主注册完 agent 前会报 `session/not-found`，投递按退避重试。
+  - Host：新增第 6 条通道 `/api/jira-work-overview/plan`（`GET` 读映射；`POST` 的 `create` / `search` /
+    `link` / `unlink` / `clear`），`planIssueGaps` / `planFirstMessage` / `findPlanSessionByToken` /
+    `createPlanSession`；字典新增 `plan.*` / `err.plan*` / `note.plan*` / `config.planSessions`。
+  - Client：任务行按钮、失败横幅、`startPlan`（先查本地绑定 → 再让 host 按标记搜 → 最后才新建），
+    字典新增 `planButton` / `planBusy` / `planNoWorkspace` / `planNoPolicy` / `planFailed` /
+    `planCreated` / `planOpened` / `planNoSession` / `planIssueLine` / `planRules`（zh + en）。
+  - 测试：新增 `test/dsh-jira-plan.mjs`（离线 24 项，真 `index.js` + 真 `client.js`，Jira / remote /
+    workspace / agents / settings 全是桩）：建在绑定的工作区、`/plan` 先于第一条消息、首条消息带标记与
+    「只汇报 / 不明确就中断」两条规则、二次点击不新建、按标记找回、缺口清单、参数报错、面板按钮与
+    `on` 状态。
+
+### Fixed
+
+- `test/dsh-jira-status.mjs` 定位「筛选」按钮时会拿到同一行新加的「按迭代 / 按 epic」切换按钮
+  （都是 `jmw-filterbtn`），改按 `aria-label` 认。
 - **从属关系视图：epic / 父任务，不靠画布。** 面板原先只有「项目 tab × sprint」一条线；现在每行额外带一行
   `↳ epic APP-123 · 标题`（子任务没有 epic 时显示 `↳ 父任务 APP-123`），点一下跳到那条任务（在当前列表里
   就滚过去并切到「全部项目」，不在就新窗口打开 Jira）。标题栏右侧的 **按迭代 / 按 epic** 开关把同一批数据

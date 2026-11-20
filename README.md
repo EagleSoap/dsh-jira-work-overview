@@ -86,6 +86,15 @@ Prefer files? Add an override row to your profile's `cordis.patch.yml` (this is 
 - The header shows the **accurate total** for the current project + status, straight from Jira's `approximate-count`.
 - Click a **status chip** on any row to move the issue; the list reloads. **Esc** closes the top-most layer (status menu → configure dialog → panel).
 - The list is **virtualized**: thousands of rows scroll smoothly because only the visible ones are in the DOM.
+- **Plan at the end of a row** (the `☰ 计划` chip) opens a *planning* conversation for that issue in the
+  workspace the project is linked to: the new session switches to plan mode, receives the issue key, title, status and link, and is told
+  to report **only the list of changes it intends to make** — no explanations, no analysis. You approve or amend
+  the plan in that conversation, and nothing is executed before you do. If the issue is too thin to plan (no
+  description, no parent and no links), the session stops instead of guessing and tells you the Jira issue is
+  unclear. One issue maps to one planning session: once bound the chip is highlighted, clicking it reopens the
+  existing conversation (the binding lives in the volatile `planSessions` config as `ISSUE<TAB>sessionId`, and a
+  lost binding is recovered from the `JIRA_PLAN_SESSION:<KEY>` marker in the session's first message). The button
+  reports what is missing when the project has no linked workspace or the profile has plan mode disabled.
 
 <img src="docs/images/panel-watch.png" width="1040" alt="The live-change banner and a row with its status dropdown open (To Do / In Progress / IN QA / Done)">
 
