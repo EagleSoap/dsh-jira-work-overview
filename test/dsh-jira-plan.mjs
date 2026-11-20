@@ -80,6 +80,8 @@ const settingsWrites = [];
 /* 「删掉计划对话」走的是基座的归档通道：记录调用，必要时模拟基座拒收。 */
 const archiveCalls = [];
 const connectionCalls = [];
+const registryArchiveCalls = [];
+let registryArchiveRefuses = false;
 let archiveRefuses = false;
 const registeredRoutes = [];
 let settingsRaw = {
@@ -109,6 +111,20 @@ const hostCtx = {
       return { async get(id) { return id === 'ws-uuid-1' ? { id, path: TMP, title: 'tmp' } : undefined; } };
     }
     if (name === 'remote') return remoteService;
+    // 工作区注册表本体：服务树上的键是 `workspaceRegistry`，`archivedSessionIds` 就是它写的。
+    if (name === 'workspaceRegistry') {
+      return {
+        async archiveSession(sessionId, options = {}) {
+          registryArchiveCalls.push({ sessionId, stopActivity: options.stopActivity === true });
+          if (registryArchiveRefuses) {
+            const error = new Error(`unknown session '${sessionId}'`);
+            error.code = 'session/not-found';
+            throw error;
+          }
+          return undefined;
+        },
+      };
+    }
     if (name === 'agents') return { list: () => sessions.map((session) => ({ id: session.id, session })) };
     if (name === 'workspaces') {
       // 回归护栏：插件不能直接取 `ctx.workspaces` —— 注册表在服务树上的名字是 `workspaceRegistry`，
@@ -286,19 +302,39 @@ archiveRefuses = false;
 const dropped = await planPayload({ action: 'drop', issue: 'APP-1' });
 syncWrites();
 check(dropped.ok === true, '归档成功 → 返回 ok', JSON.stringify({ ok: dropped.ok, sessionId: dropped.sessionId }));
-/* 兜底：遥控名册里没有 workspace 命名空间时，走连接通道上的同一个端点。 */
+/* 兜底 ①：遥控名册里没有 workspace 命名空间时，问工作区注册表本体（真机就是这个局面）。 */
 const savedRemote = hostCtx.get('remote');
+const savedRegistry = hostCtx.get('workspaceRegistry');
 hostCtx.get = ((original) => function patchedGet(name) {
   if (name === 'remote') return { session: savedRemote.session };
   return original.call(this, name);
 })(hostCtx.get);
-const beforeFallback = connectionCalls.length;
-const fallbackLink = await planPayload({ action: 'link', issue: 'APP-2', sessionId: created.sessionId });
-const fallbackDrop = await planPayload({ action: 'drop', issue: 'APP-2' });
+const beforeRegistry = registryArchiveCalls.length;
+const registryLink = await planPayload({ action: 'link', issue: 'APP-2', sessionId: created.sessionId });
+const registryDrop = await planPayload({ action: 'drop', issue: 'APP-2' });
 hostCtx.get = ((original, remote) => function restored(name) {
   return name === 'remote' ? remote : original.call(this, name);
 })(hostCtx.get, savedRemote);
-check(fallbackLink.ok === true && fallbackDrop.ok === true, '遥控缺失时改走连接通道归档', JSON.stringify(fallbackDrop));
+check(registryLink.ok === true && registryDrop.ok === true, '遥控缺失时改问工作区注册表归档', JSON.stringify(registryDrop));
+check(registryArchiveCalls.slice(beforeRegistry).some((call) => call.sessionId === created.sessionId && call.stopActivity === true),
+  '注册表归档带 stopActivity', JSON.stringify(registryArchiveCalls.slice(beforeRegistry)));
+
+/* 兜底 ②：连注册表也没有时，才退到连接通道上的同一个端点。 */
+const beforeFallback = connectionCalls.length;
+const savedRegistryService = hostCtx.get('workspaceRegistry');
+hostCtx.get = ((original) => function patchedGet(name) {
+  if (name === 'remote') return { session: savedRemote.session };
+  if (name === 'workspaceRegistry') return undefined;
+  return original.call(this, name);
+})(hostCtx.get);
+const fallbackLink = await planPayload({ action: 'link', issue: 'APP-2', sessionId: created.sessionId });
+const fallbackDrop = await planPayload({ action: 'drop', issue: 'APP-2' });
+hostCtx.get = ((original, remote, registry) => function restored(name) {
+  if (name === 'remote') return remote;
+  if (name === 'workspaceRegistry') return registry;
+  return original.call(this, name);
+})(hostCtx.get, savedRemote, savedRegistryService);
+check(fallbackLink.ok === true && fallbackDrop.ok === true, '遥控与注册表都没有时改走连接通道归档', JSON.stringify(fallbackDrop));
 check(connectionCalls.slice(beforeFallback).some((call) => call.endpoint === 'workspace/archiveSession' && call.params?.sessionId === created.sessionId && call.params?.stopActivity === true),
   '兜底端点与遥控同名、同参数', JSON.stringify(connectionCalls.slice(beforeFallback)));
 check(archiveCalls.some((call) => call.sessionId === created.sessionId && call.stopActivity === true), '用基座 remote.workspace.archiveSession 归档（带 stopActivity）', JSON.stringify(archiveCalls.slice(-1)));

@@ -45,7 +45,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
   `super(ctx, "workspaceRegistry")`）；遥控命名空间也不是 `workspaces` 而是 **`workspace`**
   （`workspaceController` 的 `super(ctx, "workspaceController", { namespace: "workspace" })`，端点键
   `workspace/archiveSession`）。现在走 `remote.workspace.archiveSession({ sessionId, stopActivity: true })`，
-  遥控缺席时退到连接通道上的同一个端点（`connection.call('workspace/archiveSession', …)`）。
+  现在依次试三道门面：`remote.workspace.archiveSession` → **工作区注册表本体** `workspaceRegistry.archiveSession`
+  （宿主的 `Connection` 根本没有 `call`，面板那套遥控又常常不暴露 `workspace` 命名空间——注册表本体才是
+  真机上唯一稳定的一挡）→ `connection.call('workspace/archiveSession', …)`。三道都没有才报「没有归档通道」。
 - 删掉计划对话后再点「计划」会打开那条已归档的会话：面板取绑定时带 `force: true`，
   host 只回映射、不再翻会话日志，另在 host 现建的路径上也带 `skipToken: true`。
 - **「计划」建会话改走 `sessions` 会话服务，不再直连 `remote.session`**：插件没在 `ctx.inject` 里声明

@@ -3196,36 +3196,76 @@ async function dropPlanSession(ctx, settings, key) {
   // 错误码翻成 `session/not-found` / `workspace/session-active`。
   // 遥控名册里这条方法挂在 **`workspace`** 命名空间下（`dsh-api-workspace-controller` 生成的
   // remote 信息里键是 `'workspace/archiveSession'`，service 为 `workspaceController`），
-  // 不是 `workspaces`；先按 `workspace.archiveSession` 叫，真机上若映射成别的也认。
-  const remote = safeService(ctx, 'remote');
-  const workspaces = remote?.workspace ?? remote?.workspaces ?? remote?.workspaceController;
+  // 不是 `workspaces`；先按 `workspace.archiveSession` 叫，真机上若映射成别的也认，
+  // 都没有就退到工作区注册表本体（见 `archivePlanSessionAnyWay`）。
   try {
     // stopActivity：规划对话此刻没在跑就是空操作；正在跑就一并停下，否则基座会拒收。
-    if (workspaces && typeof workspaces.archiveSession === 'function') {
-      await workspaces.archiveSession({ sessionId, stopActivity: true });
-    } else {
-      await archivePlanSessionViaConnection(ctx, sessionId);
-    }
+    await archivePlanSessionAnyWay(ctx, sessionId);
   } catch (error) {
     const code = String(error?.rpcError?.code ?? error?.code ?? '');
     // 已经不在活会话里（用户先手删了）：当作归档成功，绑定照样清掉。
-    if (code !== 'session/not-found') throw new Error(t('err.planArchive', { message: String(error?.message ?? error) }));
+    if (code !== 'session/not-found') {
+      throw new Error(t('err.planArchive', { message: String(error?.message ?? error) }));
+    }
   }
   delete map[key];
   await writeSettings(ctx, settings, { planSessions: serializePlanSessions(map) });
   return { sessionId };
 }
 
+/*
+ * 归档这条路的三个门面都试一遍，全部缺席才算「这个 profile 没有归档通道」：
+ *   1. `remote.workspace.archiveSession` —— 遥控名册（`workspaceController` 的 namespace 是 `workspace`）；
+ *   2. `workspaces.archiveSession` —— 工作区注册表本体（服务树键 `workspaceRegistry`，`archivedSessionIds`
+ *      就是它写的；宿主侧插件本来就在同一个进程里，这条最稳，也绕开了遥控的 JSON 门面）；
+ *   3. `connection.call('workspace/archiveSession')` —— 连接通道上的同一个端点，只在少数宿主里有。
+ * 只试一个门面的话，换一台机器就可能报「没有工作区归档通道」。
+ */
+function hasOwnArchiveApi(value) {
+  return Boolean(value) && typeof value.archiveSession === 'function';
+}
+
 /**
- * 遥控不可用时的归档兜底：与面板的遥控调用是**同一个 wire 端点**（namespace 由服务的
- * `namespace` 选项决定，`workspaceController` 的命名空间是 `workspace`），参数与返回也一样。
+ * 直接问工作区注册表归档（与侧栏右键「归档」同一处状态），并保留它的错误码
+ * （`session/not-found` 之类由调用方判）。
+ */
+async function archivePlanSessionViaRegistry(ctx, sessionId) {
+  const registry = safeService(ctx, 'workspaceRegistry')
+    ?? safeService(ctx, 'workspaces')
+    ?? safeService(ctx, 'workspace');
+  if (!hasOwnArchiveApi(registry)) return false;
+  await registry.archiveSession(sessionId, { stopActivity: true });
+  return true;
+}
+
+/**
+ * 遥控不可用时的兜底：连到要么是遥控名册里的 `workspace` 命名空间，要么是连接通道上的
+ * `workspace/archiveSession` 端点。两条路都没有就返回 false，由调用方决定报什么。
  */
 async function archivePlanSessionViaConnection(ctx, sessionId) {
   const connection = safeService(ctx, 'connection');
-  if (!connection || typeof connection.call !== 'function') {
-    throw new Error(t('err.planNoWorkspaces'));
+  if (!connection) return false;
+  if (typeof connection.call === 'function') {
+    await connection.call('workspace/archiveSession', { sessionId, stopActivity: true });
+    return true;
   }
-  await connection.call('workspace/archiveSession', { sessionId, stopActivity: true });
+  return false;
+}
+
+/**
+ * 按上面的顺序试着归档；一个门面都没有时抛 `err.planNoWorkspaces`。
+ * 返回 `false` 表示「遥控没有这个命名空间」，供调用方继续往下试。
+ */
+async function archivePlanSessionAnyWay(ctx, sessionId) {
+  const remote = safeService(ctx, 'remote');
+  const remoteWorkspace = remote?.workspace ?? remote?.workspaces ?? remote?.workspaceController;
+  if (hasOwnArchiveApi(remoteWorkspace)) {
+    await remoteWorkspace.archiveSession({ sessionId, stopActivity: true });
+    return;
+  }
+  if (await archivePlanSessionViaRegistry(ctx, sessionId)) return;
+  if (await archivePlanSessionViaConnection(ctx, sessionId)) return;
+  throw new Error(t('err.planNoWorkspaces'));
 }
 
 function registerPlanRoute(ctx, jira, settings) {
