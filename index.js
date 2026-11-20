@@ -319,7 +319,7 @@ const TEXT = {
     'err.planAction': '不支持的计划对话操作：{action}（支持 create / search / link / unlink / drop / clear）。',
     'err.planUnbound': '{key} 没有绑定计划对话：没有可归档的会话。',
     'err.planArchive': '归档计划对话失败：{message}',
-    'err.planNoWorkspaces': '这个 profile 没有提供工作区归档通道（remote.workspaces）',
+    'err.planNoWorkspaces': '这个 profile 没有提供工作区归档通道（remote.workspace）',
     'err.planSession': '缺少会话 id：没法把计划对话绑定到任务上。',
     'err.planSearch': '按任务搜计划对话失败：{message}',
     'err.planCreate': '创建计划对话失败：{message}',
@@ -520,7 +520,7 @@ const TEXT = {
     'err.planAction': 'Unsupported planning-session action: {action} (create / search / link / unlink / drop / clear).',
     'err.planUnbound': '{key} has no bound planning session: nothing to archive.',
     'err.planArchive': 'Could not archive the planning session: {message}',
-    'err.planNoWorkspaces': 'this profile exposes no workspace archive channel (remote.workspaces)',
+    'err.planNoWorkspaces': 'this profile exposes no workspace archive channel (remote.workspace)',
     'err.planSession': 'Missing session id: cannot bind a planning session to the issue.',
     'err.planSearch': 'Searching session logs for the planning session failed: {message}',
     'err.planCreate': 'Could not create the planning session: {message}',
@@ -3183,7 +3183,7 @@ async function createPlanSession(ctx, jira, payload, key) {
 /**
  * 归档一条计划对话，并把这张卡在 planSessions 里的绑定删掉。
  *
- * 「删」在 DSH 里就是**归档**（`workspaces.archiveSession`，与侧栏右键「归档」同一个通道）——
+ * 「删」在 DSH 里就是**归档**（`remote.workspace.archiveSession`，与侧栏右键「归档」同一个通道）——
  * 不能在磁盘上手删：会话日志是唯一真相，工作区的归档集合与项目缓存都要由基座一起更新。
  * 先归档、后解绑：归档失败就保留绑定，卡片仍是「已绑定」，再点还是打开原来那条。
  */
@@ -3191,18 +3191,21 @@ async function dropPlanSession(ctx, settings, key) {
   const map = parsePlanSessions(String(liveSetting(settings, 'planSessions', '') ?? ''));
   const sessionId = String(map[key] ?? '');
   if (!sessionId) throw new Error(t('err.planUnbound', { key }));
-  // 归档走基座的 workspace 遥控（`remote.workspaces.archiveSession`）：
-  // 直接 `ctx.get('workspaces')` 拿不到——注册表在服务树上的名字是 `workspaceRegistry`
-  // （`dsh-workspace` 的 `super(ctx, "workspaceRegistry")`），`workspace` 是另一条资源字段的
-  // 匹配前缀。遥控层才是对外的门面，也替我们把错误码翻成 `session/not-found` /
-  // `workspace/session-active`。
-  const workspaces = safeService(ctx, 'remote')?.workspaces;
-  if (!workspaces || typeof workspaces.archiveSession !== 'function') {
-    throw new Error(t('err.planArchive', { message: t('err.planNoWorkspaces') }));
-  }
+  // 归档走基座遥控：直接 `ctx.get('workspaces')` 拿不到——注册表在服务树上叫 `workspaceRegistry`
+  // （`dsh-workspace` 的 `super(ctx, "workspaceRegistry")`）。遥控层才是对外的门面，也替我们把
+  // 错误码翻成 `session/not-found` / `workspace/session-active`。
+  // 遥控名册里这条方法挂在 **`workspace`** 命名空间下（`dsh-api-workspace-controller` 生成的
+  // remote 信息里键是 `'workspace/archiveSession'`，service 为 `workspaceController`），
+  // 不是 `workspaces`；先按 `workspace.archiveSession` 叫，真机上若映射成别的也认。
+  const remote = safeService(ctx, 'remote');
+  const workspaces = remote?.workspace ?? remote?.workspaces ?? remote?.workspaceController;
   try {
     // stopActivity：规划对话此刻没在跑就是空操作；正在跑就一并停下，否则基座会拒收。
-    await workspaces.archiveSession({ sessionId, stopActivity: true });
+    if (workspaces && typeof workspaces.archiveSession === 'function') {
+      await workspaces.archiveSession({ sessionId, stopActivity: true });
+    } else {
+      await archivePlanSessionViaConnection(ctx, sessionId);
+    }
   } catch (error) {
     const code = String(error?.rpcError?.code ?? error?.code ?? '');
     // 已经不在活会话里（用户先手删了）：当作归档成功，绑定照样清掉。
@@ -3211,6 +3214,18 @@ async function dropPlanSession(ctx, settings, key) {
   delete map[key];
   await writeSettings(ctx, settings, { planSessions: serializePlanSessions(map) });
   return { sessionId };
+}
+
+/**
+ * 遥控不可用时的归档兜底：与面板的遥控调用是**同一个 wire 端点**（namespace 由服务的
+ * `namespace` 选项决定，`workspaceController` 的命名空间是 `workspace`），参数与返回也一样。
+ */
+async function archivePlanSessionViaConnection(ctx, sessionId) {
+  const connection = safeService(ctx, 'connection');
+  if (!connection || typeof connection.call !== 'function') {
+    throw new Error(t('err.planNoWorkspaces'));
+  }
+  await connection.call('workspace/archiveSession', { sessionId, stopActivity: true });
 }
 
 function registerPlanRoute(ctx, jira, settings) {

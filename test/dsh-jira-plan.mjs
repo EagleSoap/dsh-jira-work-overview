@@ -79,6 +79,7 @@ const jiraCalls = [];
 const settingsWrites = [];
 /* 「删掉计划对话」走的是基座的归档通道：记录调用，必要时模拟基座拒收。 */
 const archiveCalls = [];
+const connectionCalls = [];
 let archiveRefuses = false;
 const registeredRoutes = [];
 let settingsRaw = {
@@ -88,7 +89,21 @@ let settingsRaw = {
 const hostCtx = {
   get(name) {
     if (name === 'connection') {
-      return { fetch: { register(route) { registeredRoutes.push(route); return () => {}; } } };
+      return {
+        fetch: { register(route) { registeredRoutes.push(route); return () => {}; } },
+        // 遥控不可用时的兜底通道：同一个 wire 端点（`workspace/archiveSession`），参数与返回一致。
+        async call(endpoint, params) {
+          connectionCalls.push({ endpoint, params });
+          if (endpoint !== 'workspace/archiveSession') throw new Error(`unexpected endpoint ${endpoint}`);
+          archiveCalls.push({ sessionId: params?.sessionId, stopActivity: params?.stopActivity === true });
+          if (archiveRefuses) {
+            const error = new Error(`cannot archive session '${params?.sessionId}'`);
+            error.code = 'workspace/session-active';
+            throw error;
+          }
+          return { archivedSessionIds: archiveCalls.map((call) => call.sessionId) };
+        },
+      };
     }
     if (name === 'workspace') {
       return { async get(id) { return id === 'ws-uuid-1' ? { id, path: TMP, title: 'tmp' } : undefined; } };
@@ -115,9 +130,11 @@ const hostCtx = {
 const sessions = [];
 const remoteCalls = [];
 const remoteService = {
-  // 基座的 archive 门面：真实现是 `remote.workspaces.archiveSession({ sessionId, stopActivity })`，
-  // 把 registry 的错误翻成 `session/not-found` / `workspace/session-active` 两个码。
-  workspaces: {
+  // 基座的 archive 门面：遥控名册里键是 `'workspace/archiveSession'`（service `workspaceController`），
+  // 所以客户端看到的是 `remote.workspace`，**不是** `remote.workspaces`（这一处曾真机报
+  // `这个 profile 没有提供工作区归档通道`）。立即失败的错误码由它翻成
+  // `session/not-found` / `workspace/session-active`。
+  workspace: {
     async archiveSession(request) {
       const sessionId = request?.sessionId;
       archiveCalls.push({ sessionId, stopActivity: request?.stopActivity === true });
@@ -129,6 +146,7 @@ const remoteService = {
       return { archivedSessionIds: archiveCalls.map((call) => call.sessionId) };
     },
   },
+  // 回归护栏：`workspaces` 这个命名空间不存在，谁去取它谁就拿到 undefined。
   session: {
     async create({ workspaceId }) {
       remoteCalls.push({ call: 'create', workspaceId });
@@ -268,7 +286,22 @@ archiveRefuses = false;
 const dropped = await planPayload({ action: 'drop', issue: 'APP-1' });
 syncWrites();
 check(dropped.ok === true, '归档成功 → 返回 ok', JSON.stringify({ ok: dropped.ok, sessionId: dropped.sessionId }));
-check(archiveCalls.some((call) => call.sessionId === created.sessionId && call.stopActivity === true), '用基座 remote.workspaces.archiveSession 归档（带 stopActivity）', JSON.stringify(archiveCalls.slice(-1)));
+/* 兜底：遥控名册里没有 workspace 命名空间时，走连接通道上的同一个端点。 */
+const savedRemote = hostCtx.get('remote');
+hostCtx.get = ((original) => function patchedGet(name) {
+  if (name === 'remote') return { session: savedRemote.session };
+  return original.call(this, name);
+})(hostCtx.get);
+const beforeFallback = connectionCalls.length;
+const fallbackLink = await planPayload({ action: 'link', issue: 'APP-2', sessionId: created.sessionId });
+const fallbackDrop = await planPayload({ action: 'drop', issue: 'APP-2' });
+hostCtx.get = ((original, remote) => function restored(name) {
+  return name === 'remote' ? remote : original.call(this, name);
+})(hostCtx.get, savedRemote);
+check(fallbackLink.ok === true && fallbackDrop.ok === true, '遥控缺失时改走连接通道归档', JSON.stringify(fallbackDrop));
+check(connectionCalls.slice(beforeFallback).some((call) => call.endpoint === 'workspace/archiveSession' && call.params?.sessionId === created.sessionId && call.params?.stopActivity === true),
+  '兜底端点与遥控同名、同参数', JSON.stringify(connectionCalls.slice(beforeFallback)));
+check(archiveCalls.some((call) => call.sessionId === created.sessionId && call.stopActivity === true), '用基座 remote.workspace.archiveSession 归档（带 stopActivity）', JSON.stringify(archiveCalls.slice(-1)));
 check(!String(settingsRaw.planSessions).includes('APP-1'), '归档后绑定被删除（卡片回到未计划）', JSON.stringify(settingsRaw.planSessions));
 const dropAgain = await planPayload({ action: 'drop', issue: 'APP-1' });
 check(dropAgain.ok === false && /绑定|bound/i.test(String(dropAgain.error)), '对没绑定的卡再删 → 明确报错', dropAgain.error);
