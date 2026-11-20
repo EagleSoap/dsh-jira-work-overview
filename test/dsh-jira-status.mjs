@@ -460,7 +460,11 @@ console.log('再点一次：可见行数 =', rows(panel).length);
 const classNameOf = (row) => String(row.props?.className ?? '');
 const findButton = (tree, label) => collect(tree, (row) => row.type === 'button' && text(row).trim() === label)[0];
 const findByLabel = (tree, label) => collect(tree, (row) => row.type === 'button' && row.props?.['aria-label'] === label)[0];
-const filterButton = (tree) => collect(tree, (row) => row.type === 'button' && classNameOf(row).split(' ')[0] === 'jmw-filterbtn')[0];
+// tab 行右侧原本只有一个「筛选 ▾」按钮（className jmw-filterbtn）。0.16 之后同一行还有
+// 分组维度的「按迭代 / 按 epic」切换，也是 jmw-filterbtn 类，所以要按文案认「筛选」这个。
+// 文案平时是「筛选 ▾」，选中某个状态后变成「<状态名> ▾」，所以按 aria-label（恒为「筛选」）认。
+const filterButton = (tree) => collect(tree, (row) => row.type === 'button' && classNameOf(row).split(' ')[0] === 'jmw-filterbtn')
+  .find((row) => row.props?.['aria-label'] === '筛选');
 // 面板固定 all，需要「重新查一次」时只剩标题栏的刷新按钮（原来靠点「全部」范围按钮）。
 const reload = async () => { findByLabel(renderPanel(), '刷新').props.onClick(); await settle(); };
 

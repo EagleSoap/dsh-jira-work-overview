@@ -337,7 +337,10 @@ connectionReady = true;
 // 回调收到的是拿到该服务的子上下文；其余服务照旧从同一份桩里取。
 const readyCtx = { get: (name) => hostCtx.get(name), inject: hostCtx.inject, tools: hostCtx.tools };
 for (const row of connectionInjects) row.callback(readyCtx);
-console.log('connection 就绪后注册的路由数:', watchRoutes.length, '（期望 4）');
+// 6 条：state / transition / credential / settings / project-workspace / plan。
+const EXPECTED_ROUTES = 6;
+console.log('connection 就绪后注册的路由数:', watchRoutes.length, `（期望 ${EXPECTED_ROUTES}）`);
+if (watchRoutes.length !== EXPECTED_ROUTES) process.exitCode = 1;
 
 /* --------------------------------------------------------- client 半边 */
 

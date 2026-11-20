@@ -294,8 +294,35 @@ window.__ModuleLoader__.load({
         patchCustomPlaceholder: '应用名或完整路径（例如 Code.exe）',
         patchCustomOpen: '打开',
         patchOpenedApp: '已交给 {app} 打开',
+        // 任务行后面的「计划」按钮：在绑定的工作区里开一个 plan 模式会话
+        planButton: '计划',
+        planBusy: '该任务正在建计划对话…',
+        planNoWorkspace: '项目 {project} 还没有绑定工作区：先在左侧侧栏里把项目挂到工作区。',
+        planNoPolicy: '这个 profile 没有配置 plan 模式的工作方式（插件 dsh-plan-mode），无法按 plan 模式开计划对话。',
+        planFailed: '创建计划对话失败：{message}',
+        planCreated: '{key} 的计划对话已创建（plan 模式）',
+        planOpened: '已打开 {key} 的计划对话',
+        planNoSession: '工作区里没有返回新建的会话',
+        planIssueLine: '任务：{key} {summary}\n链接：{url}',
+        planRules: '要求：\n1. 只汇报「将要执行的修改任务」，按点列出，不写解释、背景、分析或实现细节；\n'
+          + '2. 计划由用户确认或修改之后才执行，不要先动手改任何东西；\n'
+          + '3. 如果这张 Jira 卡信息不全、问题不明确，不要猜也不要开始执行：直接中断，并告诉用户「Jira 任务不明确，无法进行任务」，说明缺了什么；\n'
+          + '4. 有需要用户补充的信息，就在计划末尾一次问清楚。',
       },
       en: {
+        planButton: 'Plan',
+        planBusy: 'Creating the planning session…',
+        planNoWorkspace: 'Project {project} is not linked to a workspace: link it from the sidebar first.',
+        planNoPolicy: 'This profile has no plan-mode guidance (plugin dsh-plan-mode), so the planning session cannot start in plan mode.',
+        planFailed: 'Could not create the planning session: {message}',
+        planCreated: 'Planning session for {key} created (plan mode)',
+        planOpened: 'Opened the planning session for {key}',
+        planNoSession: 'The workspace returned no new session',
+        planIssueLine: 'Issue: {key} {summary}\nLink: {url}',
+        planRules: 'Rules:\n1. Report only the changes you intend to make, as a bullet list; no explanation, background, analysis or implementation detail;\n'
+          + '2. Do not execute anything until the user approves or edits the plan;\n'
+          + '3. If this Jira issue is incomplete or the problem is unclear, do not guess and do not start: stop and tell the user the Jira issue is unclear so the task cannot proceed, and say what is missing;\n'
+          + '4. Ask for anything you still need from the user, once, at the end of the plan.',
         title: 'My Jira work items',
         loading: 'Loading…',
         empty: 'No matching work items',
@@ -584,6 +611,11 @@ window.__ModuleLoader__.load({
       // epic 是「项目 / 任务」之外的另一条关联线：一个 epic 下的任务可以横跨多个项目与多个迭代，
       // 这正是面板要的「非线性关联」。两种视图共用同一套折叠 / 虚拟列表 / 计数逻辑。
       groupMode: 'sprint',
+      // 计划对话：正在给哪条任务建计划（按钮禁用）、一次性失败提示、宿主给的 plan 模式提示词
+      // （侧栏配置页的宿主配置视图里那份，见 fetchPlanPolicy）。
+      planBusy: '',
+      planError: '',
+      planPolicy: '',
     };
     const listeners = new Set();
     const runtime = { ctx: null };
@@ -1068,6 +1100,250 @@ window.__ModuleLoader__.load({
       return workspaceLinks;
     }
 
+    /* ------------------------------------------------ 任务 → 计划对话 */
+    //
+    // 任务行后面的「计划」按钮：在项目绑定的工作区里开一个 plan 模式会话，让它先做任务规划。
+    // 一个任务只对应一个计划对话（避免重复点出好几条）：绑定记在 host 的 volatile 配置
+    // planSessions 里（一行一条 `ISSUE<TAB>sessionId`），和「项目 ↔ 工作区」同一个套路——
+    // 前端只读写、不另存。重复点击时直接打开原来那条，不再新建；本地没记（比如换了浏览器）
+    // 就让 host 按首条消息里的标记去搜会话日志，找到就补记。
+    //
+    // 计划模式的**提示词归宿主管**（plan:policy 每步按宿主配置重拼），这里只在发起那一刻
+    // 用 /plan 把模式定下来，再投递任务；投递走 remote.session.prompt（与聊天框同一条路，
+    // 会话确实进入运行态），而不是往会话里写一条「假装用户发言」的日志。
+    const PLAN_PATH = '/api/jira-work-overview/plan';
+    const PLAN_TOKEN = 'JIRA_PLAN_SESSION:';
+    /** 这个 profile 没配 plan 模式策略时，首条消息里自带的口径（与 host 的 plan.prompt.fallbackPolicy 同义）。 */
+    const NO_POLICY_POLICY = '你处在 plan 模式：先规划，用户敲定计划之后再执行。';
+    const PLAN_POLL_MS = 1000;
+    const PLAN_POLL_LIMIT = 20;
+    const plans = { loaded: false, sessions: {} };
+    const planRun = { busy: false };
+
+    function patchPlanSessions(next) {
+      if (!next || typeof next !== 'object') return;
+      plans.sessions = next.sessions && typeof next.sessions === 'object' ? next.sessions : {};
+      plans.loaded = true;
+      for (const listener of [...listeners]) listener();
+    }
+
+    async function fetchPlanSessions(force = false) {
+      if (plans.loaded && !force) return plans;
+      try {
+        const response = await watchFetch(withLanguage(`${PLAN_PATH}?t=${Date.now()}`));
+        const data = await response?.json?.().catch(() => undefined);
+        if (data && data.ok !== false) patchPlanSessions(data);
+      } catch {
+        // 通道不可用只会让「已绑定」显示不完整，不影响列表本身。
+      }
+      return plans;
+    }
+
+    async function postPlan(payload) {
+      const response = await watchFetch(withLanguage(PLAN_PATH), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await response?.json?.().catch(() => undefined);
+      if (!data || data.ok === false) throw new Error(data?.error || `HTTP ${response?.status ?? '-'}`);
+      patchPlanSessions(data);
+      return data;
+    }
+
+    /**
+     * 计划模式的宿主提示词。装的是 plan 模式的默认构建：它的 `section` 留在 profile 的
+     * cordis.patch.yml 里（不在 settings 覆盖页上），所以先读 settings 覆盖，再退到
+     * 侧栏配置页给的那份宿主配置视图。两处都没有 → 这个 profile 没有配置 plan 模式
+     * 怎么干，这时开计划对话只会拿到一个「无策略」的 plan 模式，不如直接提示。
+     */
+    function planPolicyText() {
+      const ctx = runtime.ctx;
+      const settings = ctx && typeof ctx.get === 'function' ? ctx.get('settings') : undefined;
+      const read = (name) => {
+        try {
+          return typeof settings?.get === 'function' ? settings.get(name) : undefined;
+        } catch {
+          return undefined;
+        }
+      };
+      const entry = read('deepseek-ai/dsh-plan-mode') ?? read('@deepseek-ai/dsh-plan-mode');
+      const config = entry && typeof entry === 'object' ? (entry.config ?? entry) : undefined;
+      if (typeof config?.section === 'string' && config.section.trim() !== '') return config.section;
+      const fromUi = snapshot.planPolicy;
+      return typeof fromUi === 'string' && fromUi.trim() !== '' ? fromUi : '';
+    }
+
+    function projectOfKey(key) {
+      const text = typeof key === 'string' ? key.trim() : '';
+      const dash = text.indexOf('-');
+      return (dash > 0 ? text.slice(0, dash) : text).toUpperCase();
+    }
+
+    /** 项目已经绑定的工作区 id（没绑返回空串）。 */
+    function boundWorkspaceOf(project) {
+      for (const [workspaceId, projects] of Object.entries(workspaceLinks.workspaces)) {
+        if (Array.isArray(projects) && projects.includes(project)) return workspaceId;
+      }
+      return '';
+    }
+
+    /** 让新建的计划对话出现在主视图：uiWorkspace 是官方的换主视图接口。 */
+    function openPlanSession(sessionId) {
+      const ctx = runtime.ctx;
+      const uiWorkspace = ctx && typeof ctx.get === 'function' ? ctx.get('uiWorkspace') : undefined;
+      if (uiWorkspace && typeof uiWorkspace.openSession === 'function') {
+        try {
+          uiWorkspace.openSession(sessionId);
+          return;
+        } catch {
+          /* 落位失败不影响已经建好的会话，侧栏里照样能看到 */
+        }
+      }
+    }
+
+    /** 计划对话的第一条消息：任务键、标题、链接 + 这次要按什么口径汇报。 */
+    function planMessage(item, policy) {
+      const lines = [`${PLAN_TOKEN}${item.key}`, '', t('planIssueLine', {
+        key: item.key,
+        summary: item.summary || t('untitled'),
+        url: item.url || '',
+      })];
+      // host 侧走了 plan 模式插件时策略由它每次重拼；没有时（section 空）这里补一份，口径才不丢。
+      if (!policy) lines.push('', NO_POLICY_POLICY);
+      lines.push('', t('planRules'));
+      return lines.join('\n');
+    }
+
+    /**
+     * prompt 的 requestId 由客户端生成（Host 靠它去重：重试同一 requestId 不会投递两次）。
+     * 会话里的每一次投递都必须是新值；没有 crypto.randomUUID 的老环境退回时间戳 + 随机数。
+     */
+    function newPlanRequestId() {
+      const cryptoApi = typeof globalThis !== 'undefined' ? globalThis.crypto : undefined;
+      if (cryptoApi && typeof cryptoApi.randomUUID === 'function') return cryptoApi.randomUUID();
+      return `jmw-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    }
+
+    /**
+     * 等刚建出来的会话能接收消息：Host 侧 compose 完 agent 之前，prompt 会报
+     * `session/not-found`（会话已建、agent 还没注册）。最多等几秒就报错，不无限挂。
+     */
+    async function promptWithRetry(remoteSession, sessionId, text) {
+      let last;
+      for (let attempt = 0; attempt < PLAN_POLL_LIMIT; attempt += 1) {
+        try {
+          await remoteSession.prompt({
+            requestId: newPlanRequestId(),
+            sessionId,
+            content: [{ type: 'text', text }],
+            mode: 'queue',
+          });
+          return;
+        } catch (error) {
+          last = error;
+          const code = String(error?.code ?? error?.rpcError?.code ?? '');
+          if (code !== 'session/not-found' && !/not found/i.test(String(error?.message ?? ''))) throw error;
+          await sleep(PLAN_POLL_MS);
+        }
+      }
+      throw last ?? new Error('timeout');
+    }
+
+    /**
+     * 点「计划」：建/复用一条 plan 模式会话，并把任务投给它当第一条消息。
+     * 成功后 host 侧已记下绑定，再点同一个任务只会打开那一条。
+     */
+    async function startPlan(item) {
+      const key = String(item?.key ?? '').trim();
+      if (!key || planRun.busy) return;
+      planRun.busy = true;
+      patch({ planError: '', planBusy: key });
+      try {
+        await fetchWorkspaceLinks();
+        const project = projectOfKey(key);
+        const workspaceId = boundWorkspaceOf(project);
+        if (!workspaceId) throw new Error(t('planNoWorkspace', { project }));
+        const policy = planPolicyText();
+        if (!policy) throw new Error(t('planNoPolicy'));
+
+        const remoteSession = runtime.ctx && typeof runtime.ctx.get === 'function'
+          ? runtime.ctx.get('remote')?.session
+          : undefined;
+        // 只认完整的那条路：建会话 + 执行 /plan。缺一个就走 host 路由（那边同样顺序执行）。
+        const canCreateDirectly = Boolean(remoteSession)
+          && typeof remoteSession.create === 'function'
+          && typeof remoteSession.commands?.execute === 'function';
+
+        // 1) 本地绑定优先：命中就直接打开，绝不新建。
+        const bound = plans.sessions[key];
+        if (typeof bound === 'string' && bound) {
+          openPlanSession(bound);
+          flash(t('planOpened', { key }));
+          return;
+        }
+        // 2) 本地没记：host 按首条消息里的标记搜一遍会话日志（换了浏览器 / 清过配置也能找回）。
+        //    搜索只是优化，读失败不能挡住新建——那就退一步当没搜到。
+        const found = await postPlan({ action: 'search', issue: key })
+          .then((data) => data.sessionId)
+          .catch(() => '');
+        if (typeof found === 'string' && found) {
+          openPlanSession(found);
+          flash(t('planOpened', { key }));
+          return;
+        }
+        // 3) 新建：工作区里建会话 → /plan 进计划模式 → 投递任务 → 记绑定。
+        //    /plan 放在任务消息之前：会话是新的，命令当场生效；即使宿主把它排到第一次 step，
+        //    也仍然在任务消息之前。
+        //
+        //    两条路都通：前端直接调 remote（CATALOG 会跟着更新，侧栏立刻可见、也能落位），
+        //    或者交给 host 路由（首条消息由 host 现读 Jira 拼，顺带做「信息不全」检查）。
+        //    选了 remote 但投递失败（比如这个版本还没有 commands 遥控）就退回 host 那条，
+        //    因为 host 那边会把同一条会话重新用来接着投递。
+        if (canCreateDirectly) {
+          try {
+            const created = await remoteSession.create({ workspaceId });
+            const sessionId = created?.sessionId;
+            if (!sessionId) throw new Error(t('planNoSession'));
+            await postPlan({ action: 'link', issue: key, sessionId });
+            openPlanSession(sessionId);
+            await remoteSession.commands.execute(sessionId, '/plan', [], undefined);
+            await promptWithRetry(remoteSession, sessionId, planMessage(item), planPolicyText());
+            flash(t('planCreated', { key }));
+            return;
+          } catch (error) {
+            const fallback = await postPlan({
+              action: 'create',
+              issue: key,
+              workspaceId,
+              // 不传 sessionId：让 host 现建一条。刚才那条半成品不接管，界面上也不会冒出空的闲会话。
+              policy: planPolicyText(),
+              instruction: planMessage(item),
+            }).catch(() => undefined);
+            if (!fallback?.sessionId) throw error;
+            openPlanSession(fallback.sessionId);
+            flash(t('planCreated', { key }));
+            return;
+          }
+        }
+        const created = await postPlan({
+          action: 'create',
+          issue: key,
+          workspaceId,
+          policy: planPolicyText(),
+          instruction: planMessage(item),
+        });
+        if (!created?.sessionId) throw new Error(t('planNoSession'));
+        openPlanSession(created.sessionId);
+        flash(t('planCreated', { key }));
+      } catch (error) {
+        patch({ planError: t('planFailed', { message: String(error?.message ?? error) }) });
+      } finally {
+        planRun.busy = false;
+        patch({ planBusy: '' });
+      }
+    }
+
     async function mutateWorkspaceLinks(action, payload) {
       const body = { action, ...payload };
       const response = await watchFetch(withLanguage(PROJECT_WORKSPACE_PATH), {
@@ -1131,6 +1407,7 @@ window.__ModuleLoader__.load({
     function linkWorkspaceProject(workspaceId, project) {
       mutateWorkspaceLinks('link', { workspaceId, project })
         .then(() => {
+          void fetchPlanSessions();
           patch({ linkTarget: '', project, autoPicked: project, autoPickedOnce: true });
           flash(t('wsLinkedToast', { project }));
         })
@@ -1471,6 +1748,18 @@ window.__ModuleLoader__.load({
 .jmw-badge.quiet{background:transparent}
 .jmw-badge.act{display:inline-flex;align-items:center;gap:4px;font:inherit;font-size:11px;border:1px solid transparent;cursor:pointer}
 .jmw-badge.act:hover{color:var(--dsw-alias-label-primary,#1b1d22);border-color:var(--dsw-alias-border-l3,rgba(0,0,0,.12))}
+.jmw-flash.err{color:var(--dsw-alias-state-error-primary,#d64545);
+  background:color-mix(in srgb,var(--dsw-alias-state-error-primary,#d64545) 10%,transparent);
+  border-color:color-mix(in srgb,var(--dsw-alias-state-error-primary,#d64545) 30%,transparent);
+  display:flex;align-items:flex-start;gap:8px}
+.jmw-flashclose{flex:none;margin-left:auto;padding:0 4px;font:inherit;font-size:14px;line-height:1;cursor:pointer;
+  color:inherit;background:transparent;border:0;opacity:.7}
+.jmw-flashclose:hover{opacity:1}
+/* 任务行末尾的「计划」按钮：与状态 / 优先级徽标同一套视觉，但默认透明，悬停才显边框。 */
+.jmw-badge.act.plan{opacity:.85}
+.jmw-row:hover .jmw-badge.act.plan,.jmw-badge.act.plan.on,.jmw-badge.act.plan:focus-visible{opacity:1}
+.jmw-badge.act.plan:disabled{opacity:.45;cursor:default}
+.jmw-planicon{font-size:10px;line-height:1}
 .jmw-badge.act.on{color:var(--dsw-alias-brand-primary,#4d6bfe);border-color:var(--dsw-alias-brand-primary,rgba(77,107,254,.5));
   background:var(--dsw-alias-state-info-bg,rgba(77,107,254,.08))}
 .jmw-caret{font-size:9px;line-height:1;opacity:.7}
@@ -1727,7 +2016,8 @@ window.__ModuleLoader__.load({
         'aria-label': t('title'),
         onClick() {
           const open = !snapshot.open;
-          patch({ open, credOpen: false, menuKey: '', filterOpen: false, autoPickedOnce: false });
+          // 计划失败提示是上一次点击的产物：收起 / 重开面板时一并清掉。
+          patch({ open, credOpen: false, menuKey: '', filterOpen: false, autoPickedOnce: false, planError: '' });
           // 打开时若还没有数据、或上次是错误（例如当时没有会话），就顺手重试一次。
           if (open && (snapshot.error || !snapshot.data) && !snapshot.loading) load(snapshot.scope);
           // 工作区 ↔ 项目：打开面板时按当前会话的工作区把 tab 落到关联项目上（只做这一次，之后以用户选择为准）。
@@ -2011,6 +2301,24 @@ window.__ModuleLoader__.load({
       } else if (item.updated) {
         meta.push(h('span', { key: 'updated', className: 'jmw-badge quiet' }, t('updated', { date: item.updated })));
       }
+      // 「计划」：在项目绑定的工作区里开一条 plan 模式会话（一个任务只有一条，重复点击只打开）。
+      const planning = snapshot.planBusy === item.key;
+      const hasPlan = Boolean(plans.sessions[item.key]);
+      meta.push(h('button', {
+        key: 'plan',
+        type: 'button',
+        className: `jmw-badge act plan${hasPlan ? ' on' : ''}`,
+        title: hasPlan ? t('planOpened', { key: item.key }) : t('planButton'),
+        disabled: planning || Boolean(snapshot.planBusy),
+        onClick: (event) => {
+          event?.preventDefault?.();
+          event?.stopPropagation?.();
+          void startPlan(item);
+        },
+      }, [
+        h('span', { key: 'icon', className: 'jmw-planicon', 'aria-hidden': true }, '☰'),
+        h('span', { key: 'text' }, planning ? t('planBusy') : t('planButton')),
+      ]));
       const classes = ['jmw-row'];
       if (item.category === 'done') classes.push('done');
       if (open) classes.push('open');
@@ -2565,6 +2873,20 @@ window.__ModuleLoader__.load({
         state.filterOpen ? renderFilterMenu() : null,
         banner,
         state.flash ? h('div', { key: 'flash', className: 'jmw-flash' }, state.flash) : null,
+        // 「计划」失败的提示：带一个 × 手动关掉（正文里会说明是没绑工作区 / 没配 plan 模式 / 建会话失败）。
+        state.planError
+          ? h('div', { key: 'plan-error', className: 'jmw-flash err', role: 'alert' }, [
+            h('span', { key: 'text' }, state.planError),
+            h('button', {
+              key: 'close',
+              type: 'button',
+              className: 'jmw-flashclose',
+              title: t('close'),
+              'aria-label': t('close'),
+              onClick: () => patch({ planError: '' }),
+            }, '×'),
+          ])
+          : null,
         // 切范围时旧列表留在原位（原子替换，不闪空），同时压暗一档表示「这批是上一个 tab 的」。
         // 这里就是**真正的滚动容器**：虚拟列表挂在它上面，列表、组头、空态、「加载更多」都在它里面滚。
         h('div', {
@@ -3358,8 +3680,9 @@ window.__ModuleLoader__.load({
           label: () => t('wsLinked', { projects: 'Jira' }),
         }, WorkspaceHoverLine));
 
-        // 映射要开局就有一份：会话行角标、面板开头的「本工作区」都读它。
+        // 映射要开局就有一份：会话行角标、面板开头的「本工作区」、任务行的「计划」按钮都读它。
         void fetchWorkspaceLinks();
+        void fetchPlanSessions();
 
         startWatchLoop(ctx);
       },

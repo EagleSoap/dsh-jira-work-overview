@@ -12,7 +12,7 @@ DSH serves. There is no bundler, no `lib/`, no dependencies for the client half.
 
 | Path | What it is |
 | --- | --- |
-| `index.js` | Host half. `Config` (schemastery) + `apply(ctx)`: 3 tools, `/jira` command, **4 exact Fetch routes** under `/api/jira-work-overview/*`, the background watch loop, JQL building, both JSON payloads and the Markdown renderers, the `TEXT = { zh, en }` dictionary |
+| `index.js` | Host half. `Config` (schemastery) + `apply(ctx)`: 3 tools, `/jira` command, **6 exact Fetch routes** under `/api/jira-work-overview/*`, the background watch loop, JQL building, both JSON payloads and the Markdown renderers, the `TEXT = { zh, en }` dictionary |
 | `client.js` | Client half. `window.__ModuleLoader__.load({ id, factory })`; renders the panel, the configure dialog and the config-page contributions; the `M = { zh, en }` dictionary |
 | `cordis.patch.yml` | The bundle patch DSH inserts into a profile. **Neutral defaults only** — no personal site/email/project values |
 | `locale/{en,zh}.json` | Plugin-list metadata (title + description) only; runtime copy lives in the dictionaries |
@@ -29,7 +29,8 @@ BIN="/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness"
 ELECTRON_RUN_AS_NODE=1 "$BIN" --check index.js && ELECTRON_RUN_AS_NODE=1 "$BIN" --check client.js
 ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-bundle-id.mjs  # offline (package/bundle identity; run it after any rename)
 ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-visual.mjs      # offline (rendering, virtualization)
-ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-credential.mjs  # offline (config dialog + all 4 routes)
+ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-credential.mjs  # offline (config dialog + all 6 routes)
+ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-plan.mjs        # offline (「计划」 button → planning session)
 ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-i18n.mjs        # offline (language matrix + paging)
 ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-status.mjs      # needs a real site; SKIPs when unreachable
 ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-transition.mjs  # needs a real site (never writes)

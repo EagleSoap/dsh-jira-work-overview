@@ -261,6 +261,7 @@ const TEXT = {
     'config.preferredEditor': '上次用来打开配置文件的编辑器 id（由面板写入，一般不用手改）',
     'config.apiToken': '旧版明文 token，首次加载会自动迁移进凭据库；迁移成功后请清空此项',
     'config.projectWorkspaces': '项目 ↔ 工作区：每行「项目键<TAB>工作区 id」；面板的右键菜单会写这里，一般不用手改',
+    'config.planSessions': '任务 → 计划对话：每行「任务键<TAB>会话 id」；面板任务行的「计划」按钮会写这里（一个任务只对应一条计划对话），一般不用手改',
     // 注册期提示（通道没注册成功这类非致命问题）
     'note.noCommands': '未注册 /{name} 命令：这个 profile 没有 commands 服务。',
     'note.noCommandsError': '未注册 /{name} 命令：{message}',
@@ -273,6 +274,8 @@ const TEXT = {
     'note.noSettingsRouteError': '未注册配置写入通道（{path}）：{message}',
     'note.noProjectWorkspaceRoute': '未注册「项目 ↔ 工作区」通道（{path}）：这个 profile 没有 connection.fetch 服务；仍可手改 profile 的 cordis.patch.yml。',
     'note.noProjectWorkspaceRouteError': '未注册「项目 ↔ 工作区」通道（{path}）：{message}',
+    'note.noPlanRoute': '未注册计划对话通道（{path}）：这个 profile 没有 connection.fetch 服务。',
+    'note.noPlanRouteError': '未注册计划对话通道（{path}）：{message}',
     'note.noRouteInject': '未能等待 connection 服务就绪（{message}），已改为立即注册 /api 通道。',
     'note.credUnavailable': '凭据服务不可用，{key} 仍从配置里的明文 token 读取。',
     'note.tokenMigrated': '已把配置里的明文 token 迁移进 DSH 凭据库（{key}），可以从插件配置里删除 apiToken 了。',
@@ -311,6 +314,27 @@ const TEXT = {
     'err.noSettingsService': '这个 profile 没有 settings 服务（或它没有挂 config-editor），配置无法持久化，只在本次运行内生效。',
     'err.projectKey': '无效的项目键：「{project}」，应为大写字母开头的字母数字串（如 APP）。',
     'err.projectWorkspaceId': '缺少工作区 id：没法把项目挂到工作区上。',
+    'err.planIssue': '无效的 issue key：「{issue}」，应形如 APP-3489。',
+    'err.planWorkspaceId': '缺少工作区 id：计划对话要建在项目绑定的工作区里。',
+    'err.planAction': '不支持的计划对话操作：{action}（只支持 link / unlink / clear）。',
+    'err.planSession': '缺少会话 id：没法把计划对话绑定到任务上。',
+    'err.planSearch': '按任务搜计划对话失败：{message}',
+    'err.planCreate': '创建计划对话失败：{message}',
+    'err.planWorkspaceMissing': '工作区目录不可用：{path}（{message}）；计划对话建不进去，先确认工作区还在。',
+    // 计划对话（任务行「计划」按钮）的提示词：由 host 拼首条消息，面板只带「这次的汇报口径」。
+    'plan.prompt.issue': '- 任务：{key} {summary}（状态：{status}，类型：{type}）\n- 链接：{url}',
+    'plan.prompt.parent': '- 父任务：{key} {summary}',
+    'plan.prompt.rules': '要求：\n1. 只汇报「将要执行的修改任务」，按点列出，不写解释、背景、分析或实现细节；\n2. 计划由用户确认或修改之后才执行，不要先动手改任何东西；\n3. 如果这张 Jira 卡信息不全、问题不明确，不要猜也不要开始执行：直接中断，并告诉用户「Jira 任务不明确，无法进行任务」，说明缺了什么、需要用户补充什么。',
+    'plan.prompt.unclear': '⚠ 这张卡目前缺以下内容：{missing}。按上一条要求：不要猜，先中断并告诉用户「Jira 任务不明确，无法进行任务」，列出缺的内容请用户补充；用户补全后再给计划。',
+    'plan.prompt.gapJoin': '、',
+    'plan.prompt.fallbackPolicy': '你处在 plan 模式：先把要做的事规划清楚，等用户敲定后再执行。',
+    'plan.gap.summary': '标题（summary）为空',
+    'plan.gap.status': '状态为空',
+    'plan.gap.description': '描述（description）是空的',
+    'plan.gap.context': '父任务、关联任务都没有，看不出要做成什么样',
+    'plan.gap.untitled': '（无标题）',
+    'note.planMode': '计划对话没能进入 plan 模式：{message}',
+    'note.planPersist': '计划对话的绑定没能写进配置（只在本次运行内有效）：{message}',
     'err.projectWorkspaceAction': '不支持的项目 ↔ 工作区操作：{action}（只支持 link / unlink / clear）。',
     'err.openModeInvalid': '不支持的打开方式：{mode}（只支持 default / choose / reveal / app / custom）。',
     'err.patchPathUnknown': '这个 profile 的 cordis.patch.yml 路径不可用，无法打开。',
@@ -437,6 +461,7 @@ const TEXT = {
     'config.preferredEditor': 'Id of the editor most recently used to open the config file (written by the panel; you normally should not edit this)',
     'config.apiToken': 'Legacy plaintext token; migrated into the credential store on first load. Clear this field once the migration succeeds.',
     'config.projectWorkspaces': 'Project to Workspace map: one "PROJECT<TAB>workspace id" per line, written by the panel context menu; you normally should not edit this',
+    'config.planSessions': 'Issue to planning-session map: one "ISSUE<TAB>session id" per line, written by the Plan button on each issue row (one planning session per issue); you normally should not edit this',
     'note.noCommands': 'Did not register the /{name} command: this profile has no commands service.',
     'note.noCommandsError': 'Did not register the /{name} command: {message}',
     'note.noWatchRoute': 'Did not register the panel badge channel ({path}): this profile has no connection.fetch service; desktop notifications and background watching are unaffected.',
@@ -448,6 +473,8 @@ const TEXT = {
     'note.noSettingsRouteError': 'Did not register the settings write channel ({path}): {message}',
     'note.noProjectWorkspaceRoute': 'Did not register the project-workspace channel ({path}): this profile has no connection.fetch service; you can still edit the profile cordis.patch.yml directly.',
     'note.noProjectWorkspaceRouteError': 'Did not register the project-workspace channel ({path}): {message}',
+    'note.noPlanRoute': 'Did not register the planning-session channel ({path}): this profile has no connection.fetch service.',
+    'note.noPlanRouteError': 'Did not register the planning-session channel ({path}): {message}',
     'note.noRouteInject': 'Could not wait for the connection service ({message}); registered the /api channels immediately.',
     'note.credUnavailable': 'Credential service unavailable; {key} is still read from the plaintext token in config.',
     'note.tokenMigrated': 'Migrated the plaintext token from config into the DSH credential store ({key}); you can remove apiToken from the plugin config now.',
@@ -484,6 +511,27 @@ const TEXT = {
     'err.noSettingsService': 'This profile has no settings service (or it has no config-editor attached); the config cannot be persisted and applies only to this run.',
     'err.projectKey': 'Invalid project key: "{project}"; expected an uppercase alphanumeric key such as APP.',
     'err.projectWorkspaceId': 'Missing workspace id: cannot link a project to a workspace.',
+    'err.planIssue': 'Invalid issue key: "{issue}"; expected a key such as APP-3489.',
+    'err.planWorkspaceId': 'Missing workspace id: a planning session must live in the project\'s linked workspace.',
+    'err.planAction': 'Unsupported planning-session action: {action} (only link / unlink / clear).',
+    'err.planSession': 'Missing session id: cannot bind a planning session to the issue.',
+    'err.planSearch': 'Searching session logs for the planning session failed: {message}',
+    'err.planCreate': 'Could not create the planning session: {message}',
+    'err.planWorkspaceMissing': 'Workspace directory unavailable: {path} ({message}); the planning session cannot be created until the workspace is back.',
+    'plan.prompt.issue': '- Issue: {key} {summary} (status {status}, type {type})\n- Link: {url}',
+    'plan.prompt.parent': '- Parent: {key} {summary}',
+    'plan.prompt.rules': 'Rules:\n1. Report only the changes you intend to make, as a bullet list; no explanation, background, analysis or implementation detail;\n2. Do not execute anything until the user approves or edits the plan;\n3. If this Jira issue is incomplete or the problem is unclear, do not guess and do not start: stop and tell the user the Jira issue is unclear so the task cannot proceed, and say what is missing.',
+    'plan.prompt.unclear': '⚠ This issue currently lacks: {missing}. Per the previous rule: do not guess; stop and tell the user the Jira issue is unclear so the task cannot proceed, list what is missing, and ask for it; give a plan only after the user fills it in.',
+    'plan.prompt.gapJoin': ', ',
+    'plan.prompt.fallbackPolicy': 'You are in plan mode: work out the plan first and wait for the user to approve it before executing.',
+    'plan.gap.summary': 'title (summary) is empty',
+    'plan.gap.status': 'status is empty',
+    'plan.gap.description': 'description is empty',
+    'plan.gap.context': 'no parent or linked issue, so the intended outcome is not visible',
+    'plan.gap.untitled': '(untitled)',
+    'note.planMode': 'The planning session did not enter plan mode: {message}',
+    'note.planPersist': 'The planning-session binding could not be written to the config (applies to this run only): {message}',
+
     'err.projectWorkspaceAction': 'Unsupported project-workspace action: {action} (only link / unlink / clear).',
     'err.openModeInvalid': 'Unsupported open mode: {mode} (only default / choose / reveal / app / custom are supported).',
     'err.patchPathUnknown': 'The cordis.patch.yml path of this profile is unavailable, so it cannot be opened.',
@@ -710,6 +758,12 @@ export const Config = Schema.object({
     .default('')
     .volatile()
     .description(t('config.projectWorkspaces')),
+  // 任务 → 计划对话：一行「任务键 <TAB> 会话 id」。一个任务只有一条计划对话，重复点「计划」时
+  // 前端先查这里，命中就只打开、不再新建。与上面同一种存法（volatile 字符串），由前端经路由读写。
+  planSessions: Schema.string()
+    .default('')
+    .volatile()
+    .description(t('config.planSessions')),
   apiToken: Schema.string()
     .default('')
     .description(t('config.apiToken')),
@@ -755,6 +809,8 @@ function registerApiRoutes(ctx, jira, settings) {
     registerSettingsRoute(routeCtx, jira, settings);
     // 项目 ↔ 工作区：面板右键菜单用它把某个项目挂到当前工作区。
     registerProjectWorkspaceRoute(routeCtx, jira, settings);
+    // 任务 → 计划对话：任务行的「计划」按钮读写绑定、并按需建一条 plan 模式会话。
+    registerPlanRoute(routeCtx, jira, settings);
   };
   if (typeof ctx?.inject === 'function') {
     try {
@@ -2364,6 +2420,10 @@ async function writeSettings(ctx, settings, patch) {
   if (typeof patch?.projectWorkspaces === 'string') {
     ops.push({ op: 'set', path: ['projectWorkspaces'], value: patch.projectWorkspaces });
   }
+  // 任务 → 计划对话映射（同样是整串覆盖；空串 = 清空）。
+  if (typeof patch?.planSessions === 'string') {
+    ops.push({ op: 'set', path: ['planSessions'], value: patch.planSessions });
+  }
   const interval = Number(unwrapValue(patch?.watchIntervalMs));
   if (Number.isFinite(interval) && interval > 0) {
     ops.push({ op: 'set', path: ['watchIntervalMs'], value: Math.max(15000, Math.floor(interval)) });
@@ -2858,6 +2918,307 @@ function registerProjectWorkspaceRoute(ctx, jira, settings) {
     });
   } catch (error) {
     jira.notes.push(t('note.noProjectWorkspaceRouteError', { path: PROJECT_WORKSPACE_PATH, message: error?.message ?? error }));
+  }
+}
+
+/* --------------------------------------------- 任务 → 计划对话 */
+//
+// 面板任务行末尾的「计划」按钮：在项目绑定的工作区里开一条 plan 模式会话，先做任务规划，
+// 由用户在对话里敲定或修改。**一个任务只对应一条计划对话**——绑定存成一串
+// `ISSUE<TAB>sessionId`（Config 的 planSessions，volatile，和 projectWorkspaces 同一个存法），
+// 重复点击时前端先查这里，命中就只打开。
+//
+// 本地映射只记「面板开过的」：换个浏览器、清过配置之后映射就空了。所以还有第二道保险——
+// 每条计划对话的第一条消息都带一个标记 `JIRA_PLAN_SESSION:<KEY>`，host 直接翻会话日志找它，
+// 找到就把绑定补回去。会话日志是唯一真相，配置只是它的缓存。
+
+const PLAN_PATH = '/api/jira-work-overview/plan';
+/** 计划对话首条消息里的任务标记（前端拼、host 搜）。 */
+const PLAN_SESSION_TOKEN = 'JIRA_PLAN_SESSION:';
+const ISSUE_KEY_RE = /^[A-Z][A-Z0-9_]*-\d+$/;
+
+/** 解析 `ISSUE<TAB>sessionId` 串（换行分隔；行内用 tab / 空格分开；同 key 后写覆盖先写）。 */
+function parsePlanSessions(raw) {
+  const map = {};
+  const text = typeof raw === 'string' ? raw : '';
+  for (const line of text.split(/[\r\n;]+/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const pair = trimmed.split(/[\t ]+/).filter(Boolean);
+    const key = String(pair[0] ?? '').trim().toUpperCase();
+    const sessionId = String(pair[1] ?? '').trim();
+    if (!ISSUE_KEY_RE.test(key) || !sessionId) continue;
+    map[key] = sessionId;
+  }
+  return map;
+}
+
+/** 稳定写法：任务键升序。 */
+function serializePlanSessions(map) {
+  return Object.keys(map).sort().map((key) => `${key}\t${map[key]}`).join('\n');
+}
+
+function planSessionsView(settings) {
+  return {
+    ok: true,
+    sessions: parsePlanSessions(String(liveSetting(settings, 'planSessions', '') ?? '')),
+  };
+}
+
+function requireIssueKey(payload) {
+  const key = String(payload?.issue ?? '').trim().toUpperCase();
+  if (!ISSUE_KEY_RE.test(key)) throw new Error(t('err.planIssue', { issue: payload?.issue ?? '' }));
+  return key;
+}
+
+/** 目标工作区的目录：存在才建会话（目录没了就明说，而不是抛一个 ENOENT）。 */
+async function planWorkspacePath(ctx, workspaceId) {
+  const workspaces = safeService(ctx, 'workspace');
+  if (!workspaces || typeof workspaces.get !== 'function') throw new Error(t('err.planWorkspaceId'));
+  const workspace = await workspaces.get(workspaceId);
+  const path = typeof workspace?.path === 'string' ? workspace.path : '';
+  if (!path) throw new Error(t('err.planWorkspaceId'));
+  const fs = await import('node:fs/promises');
+  try {
+    const stat = await fs.stat(path);
+    if (!stat.isDirectory()) throw new Error('not a directory');
+  } catch (error) {
+    throw new Error(t('err.planWorkspaceMissing', { path, message: String(error?.message ?? error) }));
+  }
+  return { workspace, path };
+}
+
+/** 读一次 Jira 卡（只要规划需要的字段）。 */
+async function fetchPlanIssue(jira, key, signal) {
+  const body = await jira.get(
+    `/rest/api/3/issue/${encodeURIComponent(key)}`,
+    { fields: 'summary,status,issuetype,parent,issuelinks,description' },
+    signal,
+  );
+  const fields = body?.fields ?? {};
+  return {
+    key: body?.key ?? key,
+    summary: String(fields.summary ?? '').trim(),
+    status: fields.status?.name ?? '',
+    type: fields.issuetype?.name ?? '',
+    parentKey: fields.parent?.key ?? '',
+    parentSummary: String(fields.parent?.fields?.summary ?? '').trim(),
+    hasDescription: hasPlanDescription(fields.description),
+    links: Array.isArray(fields.issuelinks) ? fields.issuelinks.length : 0,
+    url: `${jira.settings.baseUrl}/browse/${body?.key ?? key}`,
+  };
+}
+
+/** 描述字段（ADF）里有没有一句真正的文字：只有附件 / 空白面板都算「没写描述」。 */
+function hasPlanDescription(node) {
+  if (node === undefined || node === null) return false;
+  if (typeof node === 'string') return node.trim() !== '';
+  if (Array.isArray(node)) return node.some((child) => hasPlanDescription(child));
+  if (typeof node === 'object') {
+    if (typeof node.text === 'string' && node.text.trim() !== '') return true;
+    return Array.isArray(node.content) ? node.content.some((child) => hasPlanDescription(child)) : false;
+  }
+  return false;
+}
+
+/**
+ * Jira 卡是不是「信息不全、问题不明确」——正是用户要求中断并提示的那种情况。
+ * 只看结构证据（缺标题、没摘要、没描述、没有下挂任务），不猜语义：误报的代价只是让用户补一句，
+ * 漏报的代价是会话拿着一句标题瞎规划。
+ */
+function planIssueGaps(issue) {
+  const gaps = [];
+  if (!issue.summary) gaps.push(t('plan.gap.summary'));
+  if (!issue.status) gaps.push(t('plan.gap.status'));
+  if (!issue.hasDescription) gaps.push(t('plan.gap.description'));
+  if (!issue.parentKey && issue.links === 0) gaps.push(t('plan.gap.context'));
+  return gaps;
+}
+
+/** 计划对话的首条消息：标记 + 任务 + 宿主给的汇报口径 + （缺信息时）中断指令。 */
+function planFirstMessage(issue, policy, instruction, gaps) {
+  const lines = [
+    `${PLAN_SESSION_TOKEN}${issue.key}`,
+    '',
+    t('plan.prompt.issue', {
+      key: issue.key,
+      summary: issue.summary || t('plan.gap.untitled'),
+      status: issue.status || '-',
+      type: issue.type || '-',
+      url: issue.url,
+    }),
+  ];
+  if (issue.parentKey) {
+    lines.push(t('plan.prompt.parent', { key: issue.parentKey, summary: issue.parentSummary || '-' }));
+  }
+  // 宿主侧的 plan 模式没有配工作方式时（section 为空串插件根本起不来），面板会把自己的汇报口径
+  // 随请求带过来；两者都有时都用上——一份是部署方的策略，一份是这次要的汇报格式。
+  const text = [policy.trim(), instruction.trim()].filter(Boolean).join('\n\n') || t('plan.prompt.fallbackPolicy');
+  lines.push('', text, '', t('plan.prompt.rules'));
+  if (gaps.length > 0) {
+    lines.push('', t('plan.prompt.unclear', { key: issue.key, missing: gaps.join(t('plan.prompt.gapJoin')) }));
+  }
+  return lines.join('\n');
+}
+
+/**
+ * 按标记翻会话日志找这条任务的计划对话，找到就补记绑定。
+ * 读的是注册表里的会话（只在内存里没被回收的那些）；读不到就返回空串，让调用方照常新建。
+ */
+async function findPlanSessionByToken(ctx, key) {
+  const agents = safeService(ctx, 'agents');
+  if (!agents || typeof agents.list !== 'function') return '';
+  const token = `${PLAN_SESSION_TOKEN}${key}`;
+  for (const agent of agents.list()) {
+    try {
+      const session = agent?.session;
+      if (!session || typeof session.snapshotEvents !== 'function') continue;
+      const events = session.snapshotEvents(0) ?? [];
+      for (const event of events) {
+        if (event?.type !== 'user/message') continue;
+        const parts = event?.data?.content;
+        const text = Array.isArray(parts)
+          ? parts.filter((part) => part?.type === 'text').map((part) => part.text).join('\n')
+          : '';
+        if (!text.includes(token)) continue;
+        const sessionId = String(session.id ?? agent?.id ?? '');
+        if (sessionId) return sessionId;
+        break;
+      }
+    } catch {
+      /* 单个会话读不出来不影响别的会话 */
+    }
+  }
+  return '';
+}
+
+/**
+ * 建一条计划对话：工作区里新建会话 → /plan 进计划模式 → 投递首条消息。
+ * 顺序是「先 plan 再投递」：会话是新的，命令当场生效；即便宿主把它排到第一次 step，
+ * 也仍然排在任务消息之前。
+ */
+async function createPlanSession(ctx, jira, payload, key) {
+  const workspaceId = String(payload?.workspaceId ?? '').trim();
+  if (!workspaceId) throw new Error(t('err.planWorkspaceId'));
+  const signal = payload?.signal;
+  const issue = await fetchPlanIssue(jira, key, signal);
+  const gaps = planIssueGaps(issue);
+  await planWorkspacePath(ctx, workspaceId);
+
+  const remote = safeService(ctx, 'remote');
+  const sessionApi = remote?.session;
+  if (!sessionApi || typeof sessionApi.create !== 'function') throw new Error(t('err.planCreate', { message: 'no remote service' }));
+  const created = await sessionApi.create({ workspaceId });
+  const sessionId = String(created?.sessionId ?? '');
+  if (!sessionId) throw new Error(t('err.planCreate', { message: 'no sessionId' }));
+
+  // 先把绑定记下来：即便后面投递失败，这条会话也已经属于这张卡，重复点击不会再开第二条。
+  const map = parsePlanSessions(String(liveSetting(jira.settings, 'planSessions', '') ?? ''));
+  map[key] = sessionId;
+  let persisted = true;
+  try {
+    const written = await writeSettings(ctx, jira.settings, { planSessions: serializePlanSessions(map) });
+    persisted = written?.persisted !== false;
+  } catch (error) {
+    persisted = false;
+    jira.notes.push(t('note.planPersist', { message: String(error?.message ?? error) }));
+  }
+
+  const policy = String(payload?.policy ?? '');
+  const instruction = String(payload?.instruction ?? '');
+  const message = planFirstMessage(issue, policy, instruction, gaps);
+  const commands = sessionApi.commands;
+  let entered = false;
+  if (commands && typeof commands.execute === 'function') {
+    try {
+      await commands.execute(sessionId, '/plan', [], undefined);
+      entered = true;
+    } catch (error) {
+      jira.notes.push(t('note.planMode', { message: String(error?.message ?? error) }));
+    }
+  }
+  // 刚建出来的会话，Host 侧的 agent 是异步注册的：prompt 在它就绪前会报 session/not-found。
+  let lastError;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      await sessionApi.prompt({
+        sessionId,
+        mode: 'queue',
+        content: [{ type: 'text', text: message }],
+      }, { kind: 'plugin', name: 'jira-work-overview' });
+      lastError = undefined;
+      break;
+    } catch (error) {
+      lastError = error;
+      if (String(error?.code ?? '') !== 'session/not-found') break;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+  if (lastError) {
+    throw new Error(t('err.planCreate', { message: String(lastError?.message ?? lastError) }));
+  }
+  return { sessionId, entered, gaps, persisted };
+}
+
+/** GET = 读映射；POST = search（按标记找已有会话）/ link / unlink / clear / create（整条流程）。 */
+function registerPlanRoute(ctx, jira, settings) {
+  const registry = safeService(ctx, 'connection')?.fetch;
+  if (!registry || typeof registry.register !== 'function') {
+    jira.notes.push(t('note.noPlanRoute', { path: PLAN_PATH }));
+    return;
+  }
+  try {
+    registry.register({
+      path: PLAN_PATH,
+      methods: ['GET', 'POST'],
+      requestBody: 'buffered',
+      async fetch(request) {
+        const query = new URL(request.url).searchParams;
+        jira.useLang(query.get('lang'));
+        try {
+          if (request.method !== 'POST') return jsonResponse(planSessionsView(settings));
+          const payload = await request.json().catch(() => ({}));
+          const action = String(payload?.action ?? '').trim();
+          if (action === 'create') {
+            const key = requireIssueKey(payload);
+            const result = await createPlanSession(ctx, jira, payload, key);
+            return jsonResponse({ ...planSessionsView(settings), ...result });
+          }
+          if (action === 'search') {
+            const key = requireIssueKey(payload);
+            let sessionId = '';
+            try {
+              sessionId = await findPlanSessionByToken(ctx, key);
+            } catch (error) {
+              throw new Error(t('err.planSearch', { message: String(error?.message ?? error) }));
+            }
+            const map = parsePlanSessions(String(liveSetting(settings, 'planSessions', '') ?? ''));
+            const bound = String(map[key] ?? '');
+            return jsonResponse({ ...planSessionsView(settings), sessionId: sessionId || bound, bound });
+          }
+          const key = requireIssueKey(payload);
+          const map = parsePlanSessions(String(liveSetting(settings, 'planSessions', '') ?? ''));
+          if (action === 'clear') {
+            await writeSettings(ctx, settings, { planSessions: '' });
+            return jsonResponse(planSessionsView(settings));
+          }
+          if (action !== 'link' && action !== 'unlink') throw new Error(t('err.planAction', { action: action || '-' }));
+          if (action === 'link') {
+            const sessionId = String(payload?.sessionId ?? '').trim();
+            if (!sessionId) throw new Error(t('err.planSession'));
+            map[key] = sessionId;
+          } else {
+            delete map[key];
+          }
+          await writeSettings(ctx, settings, { planSessions: serializePlanSessions(map) });
+          return jsonResponse(planSessionsView(settings));
+        } catch (error) {
+          return jsonResponse({ ok: false, error: String(error?.message ?? error) }, 400);
+        }
+      },
+    });
+  } catch (error) {
+    jira.notes.push(t('note.noPlanRouteError', { path: PLAN_PATH, message: error?.message ?? error }));
   }
 }
 
