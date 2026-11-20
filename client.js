@@ -298,7 +298,6 @@ window.__ModuleLoader__.load({
         planButton: '计划',
         planBusy: '该任务正在建计划对话…',
         planNoWorkspace: '项目 {project} 还没有绑定工作区：先在左侧侧栏里把项目挂到工作区。',
-        planNoPolicy: '这个 profile 没有配置 plan 模式的工作方式（插件 dsh-plan-mode），无法按 plan 模式开计划对话。',
         planFailed: '创建计划对话失败：{message}',
         planCreated: '{key} 的计划对话已创建（plan 模式）',
         planOpened: '已打开 {key} 的计划对话',
@@ -313,7 +312,6 @@ window.__ModuleLoader__.load({
         planButton: 'Plan',
         planBusy: 'Creating the planning session…',
         planNoWorkspace: 'Project {project} is not linked to a workspace: link it from the sidebar first.',
-        planNoPolicy: 'This profile has no plan-mode guidance (plugin dsh-plan-mode), so the planning session cannot start in plan mode.',
         planFailed: 'Could not create the planning session: {message}',
         planCreated: 'Planning session for {key} created (plan mode)',
         planOpened: 'Opened the planning session for {key}',
@@ -611,7 +609,7 @@ window.__ModuleLoader__.load({
       // epic 是「项目 / 任务」之外的另一条关联线：一个 epic 下的任务可以横跨多个项目与多个迭代，
       // 这正是面板要的「非线性关联」。两种视图共用同一套折叠 / 虚拟列表 / 计数逻辑。
       groupMode: 'sprint',
-      // 计划对话：正在给哪条任务建计划（按钮禁用）、一次性失败提示、宿主给的 plan 模式提示词
+      // 计划对话：正在给哪条任务建计划（按钮禁用）、一次性失败提示、宿主给的 plan 模式提示词（可空）
       // （侧栏配置页的宿主配置视图里那份，见 fetchPlanPolicy）。
       planBusy: '',
       planError: '',
@@ -1113,8 +1111,12 @@ window.__ModuleLoader__.load({
     // 会话确实进入运行态），而不是往会话里写一条「假装用户发言」的日志。
     const PLAN_PATH = '/api/jira-work-overview/plan';
     const PLAN_TOKEN = 'JIRA_PLAN_SESSION:';
-    /** 这个 profile 没配 plan 模式策略时，首条消息里自带的口径（与 host 的 plan.prompt.fallbackPolicy 同义）。 */
-    const NO_POLICY_POLICY = '你处在 plan 模式：先规划，用户敲定计划之后再执行。';
+    /**
+     * 这个 profile 没装 plan 模式插件时，随首条消息带过去的「计划工作方式」。
+     * 装了插件（profile 里有 `@deepseek-ai/dsh-plan-mode` 且 section 非空）就用它的 section，
+     * 这里只在插件缺席时兜底：计划对话是插件自己的功能，不要求用户先去 profile 里装 plan 模式。
+     */
+    const NO_POLICY_POLICY = '你处在 plan 模式：只做规划，不执行。只按点列出将要执行的修改任务，用户敲定后再执行。';
     const PLAN_POLL_MS = 1000;
     const PLAN_POLL_LIMIT = 20;
     const plans = { loaded: false, sessions: {} };
@@ -1154,8 +1156,8 @@ window.__ModuleLoader__.load({
     /**
      * 计划模式的宿主提示词。装的是 plan 模式的默认构建：它的 `section` 留在 profile 的
      * cordis.patch.yml 里（不在 settings 覆盖页上），所以先读 settings 覆盖，再退到
-     * 侧栏配置页给的那份宿主配置视图。两处都没有 → 这个 profile 没有配置 plan 模式
-     * 怎么干，这时开计划对话只会拿到一个「无策略」的 plan 模式，不如直接提示。
+     * 侧栏配置页给的那份宿主配置视图。两处都没有 → 这个 profile 没装 plan 模式插件，
+     * 返回空串，由调用方兜底（plans 是插件自己的功能，不要求用户先去改 profile）。
      */
     function planPolicyText() {
       const ctx = runtime.ctx;
@@ -1171,7 +1173,26 @@ window.__ModuleLoader__.load({
       const config = entry && typeof entry === 'object' ? (entry.config ?? entry) : undefined;
       if (typeof config?.section === 'string' && config.section.trim() !== '') return config.section;
       const fromUi = snapshot.planPolicy;
-      return typeof fromUi === 'string' && fromUi.trim() !== '' ? fromUi : '';
+      return typeof fromUi === 'string' && fromUi.trim() !== '' ? fromUi : profilePlanSection();
+    }
+
+    /**
+     * profile 装载时的 plan 模式 section。
+     * 客户端服务表只露出 `settings` 的 `get()`；没装 plan 模式插件时它什么也不给，
+     * 所以再读一次靴子数据（与面板的配置视图同源），两边都没有才算「没配」。
+     */
+    function profilePlanSection() {
+      const boot = typeof globalThis !== 'undefined' ? globalThis.__DSH_BOOT__ : undefined;
+      const rows = boot?.patch?.insert ?? boot?.insert ?? boot?.patchRows;
+      if (!Array.isArray(rows)) return '';
+      for (const row of rows) {
+        // 行 id 是 `deepseek-ai/dsh-plan-mode`，name 是 `@deepseek-ai/dsh-plan-mode`：两种写法的都能认。
+        const id = `${String(row?.id ?? '')} ${String(row?.name ?? '')}`;
+        if (!id.includes('dsh-plan-mode')) continue;
+        const section = row?.config?.section ?? row?.section;
+        if (typeof section === 'string' && section.trim() !== '') return section;
+      }
+      return '';
     }
 
     function projectOfKey(key) {
@@ -1209,8 +1230,10 @@ window.__ModuleLoader__.load({
         summary: item.summary || t('untitled'),
         url: item.url || '',
       })];
-      // host 侧走了 plan 模式插件时策略由它每次重拼；没有时（section 空）这里补一份，口径才不丢。
-      if (!policy) lines.push('', NO_POLICY_POLICY);
+      // 装了 plan 模式插件：宿主每步自己拼 plan:policy，首条消息里再放一份就是重复。
+      // 没装：这里补一份兜底口径，否则会话里没有任何「只做规划」的约束。
+      if (policy) lines.push('', policy);
+      else lines.push('', NO_POLICY_POLICY);
       lines.push('', t('planRules'));
       return lines.join('\n');
     }
@@ -1264,8 +1287,9 @@ window.__ModuleLoader__.load({
         const project = projectOfKey(key);
         const workspaceId = boundWorkspaceOf(project);
         if (!workspaceId) throw new Error(t('planNoWorkspace', { project }));
+        // 计划口径：profile 装了 plan 模式插件就用它的 section；没装时由首条消息自己带一份
+        // （NO_POLICY_POLICY），不因为「宿主没配」就拒绝开对话。
         const policy = planPolicyText();
-        if (!policy) throw new Error(t('planNoPolicy'));
 
         const remoteSession = runtime.ctx && typeof runtime.ctx.get === 'function'
           ? runtime.ctx.get('remote')?.session
@@ -1308,7 +1332,7 @@ window.__ModuleLoader__.load({
             await postPlan({ action: 'link', issue: key, sessionId });
             openPlanSession(sessionId);
             await remoteSession.commands.execute(sessionId, '/plan', [], undefined);
-            await promptWithRetry(remoteSession, sessionId, planMessage(item), planPolicyText());
+            await promptWithRetry(remoteSession, sessionId, planMessage(item, policy));
             flash(t('planCreated', { key }));
             return;
           } catch (error) {
@@ -1317,8 +1341,8 @@ window.__ModuleLoader__.load({
               issue: key,
               workspaceId,
               // 不传 sessionId：让 host 现建一条。刚才那条半成品不接管，界面上也不会冒出空的闲会话。
-              policy: planPolicyText(),
-              instruction: planMessage(item),
+              policy,
+              instruction: planMessage(item, policy),
             }).catch(() => undefined);
             if (!fallback?.sessionId) throw error;
             openPlanSession(fallback.sessionId);
@@ -1330,8 +1354,8 @@ window.__ModuleLoader__.load({
           action: 'create',
           issue: key,
           workspaceId,
-          policy: planPolicyText(),
-          instruction: planMessage(item),
+          policy,
+          instruction: planMessage(item, policy),
         });
         if (!created?.sessionId) throw new Error(t('planNoSession'));
         openPlanSession(created.sessionId);
@@ -2873,7 +2897,7 @@ window.__ModuleLoader__.load({
         state.filterOpen ? renderFilterMenu() : null,
         banner,
         state.flash ? h('div', { key: 'flash', className: 'jmw-flash' }, state.flash) : null,
-        // 「计划」失败的提示：带一个 × 手动关掉（正文里会说明是没绑工作区 / 没配 plan 模式 / 建会话失败）。
+        // 「计划」失败的提示：带一个 × 手动关掉（正文里会说明是没绑工作区还是建会话失败）。
         state.planError
           ? h('div', { key: 'plan-error', className: 'jmw-flash err', role: 'alert' }, [
             h('span', { key: 'text' }, state.planError),

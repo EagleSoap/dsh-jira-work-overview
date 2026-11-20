@@ -313,7 +313,6 @@ const M = {
     planButton: '计划',
     planBusy: '该任务正在建计划对话…',
     planNoWorkspace: '项目 {project} 还没有绑定工作区',
-    planNoPolicy: '这个 profile 没有配置 plan 模式的提示词',
     planCreated: '已为 {key} 建好计划对话',
     planOpened: '{key} 已有计划对话，已为你打开',
     planIssueLine: '任务：{key} {summary}\n链接：{url}',
@@ -336,7 +335,15 @@ Object.defineProperty(globalThis, 'document', { value: fakeDocument, configurabl
 Object.defineProperty(globalThis, 'navigator', { value: { language: 'zh-CN' }, configurable: true });
 
 const clientRoutes = [];
+const clientJobs = [];
 const clientPlanSessions = { sessions: {} };
+/* 面板看到的那批卡片；后面加一张，验证「没装 plan 模式插件」时的二次点击。 */
+const clientListItems = [{
+  key: 'APP-1', project: 'APP', summary: '登录页加「记住我」', status: 'To Do', category: 'new',
+  type: 'Story', priority: '', sprintId: null, sprint: '', due: '', updated: '2026-11-19',
+  labels: [], parent: '', parentKey: '', parentSummary: '', epicKey: '', epicSummary: '',
+  url: 'https://example.atlassian.net/browse/APP-1',
+}];
 const loaded = [];
 const fakeWindow = {
   __ModuleLoader__: { load: (spec) => { loaded.push(spec); } },
@@ -360,6 +367,9 @@ const fakeWindow = {
 };
 Object.defineProperty(globalThis, 'window', { value: fakeWindow, configurable: true });
 
+/* profile 里的 plan 模式 section：模拟「装了 dsh-plan-mode 插件」；设成空串就是没装。 */
+let profilePlanSection = '你在 plan 模式：先规划，用户敲定后再执行。';
+
 /* 客户端上下文：remote.session 走真路（建会话 + /plan + prompt），并留下调用记录。 */
 const clientRemoteCalls = [];
 const clientOpened = [];
@@ -368,6 +378,7 @@ const clientCtx = {
     if (name === 'remote.commands') {
       return {
         async execute(sessionId, line) {
+          clientJobs.push(String(line));
           // 面板列表：固定返回一条卡在 APP 项目下（不联网）。
           return {
             ok: true,
@@ -380,19 +391,14 @@ const clientCtx = {
                   generatedAt: '2026-11-20T00:00:00.000Z',
                   query: { scope: 'all', jql: 'x' },
                   project: 'APP',
-                  counts: { new: 1, indeterminate: 0, done: 0, total: 1 },
-                  total: 1,
-                  projectTotals: { APP: 1 },
+                  counts: { new: clientListItems.length, indeterminate: 0, done: 0, total: clientListItems.length },
+                  total: clientListItems.length,
+                  projectTotals: { APP: clientListItems.length },
                   status: '',
                   statusOptions: [],
                   notes: [],
-                  items: [{
-                    key: 'APP-1', project: 'APP', summary: '登录页加「记住我」', status: 'To Do', category: 'new',
-                    type: 'Story', priority: '', sprintId: null, sprint: '', due: '', updated: '2026-11-19',
-                    labels: [], parent: '', parentKey: '', parentSummary: '', epicKey: '', epicSummary: '',
-                    url: 'https://example.atlassian.net/browse/APP-1',
-                  }],
-                  sprints: [{ id: null, name: '无迭代', state: '', start: '', end: '', active: false, keys: ['APP-1'], counts: { new: 1, indeterminate: 0, done: 0, total: 1 } }],
+                  items: clientListItems.map((row) => ({ ...row })),
+                  sprints: [{ id: null, name: '无迭代', state: '', start: '', end: '', active: false, keys: clientListItems.map((row) => row.key), counts: { new: clientListItems.length, indeterminate: 0, done: 0, total: clientListItems.length } }],
                 }),
               },
             },
@@ -413,8 +419,12 @@ const clientCtx = {
     }
     if (name === 'uiWorkspace') return { openSession(id) { clientOpened.push(id); } };
     if (name === 'settings') {
-      // 这个 profile 装了 plan 模式并在 profile patch 里配了 section（面板读它就知道该说什么）。
-      return { get: (ns) => (ns === 'deepseek-ai/dsh-plan-mode' ? { config: { section: '你在 plan 模式：先规划，用户敲定后再执行。' } } : undefined) };
+      // 装了 plan 模式就在 profile patch 里配了 section（面板读它就知道该按什么口径规划）。
+      return {
+        get: (ns) => (ns === 'deepseek-ai/dsh-plan-mode' && profilePlanSection
+          ? { config: { section: profilePlanSection } }
+          : undefined),
+      };
     }
     if (name === 'locale') {
       return {
@@ -429,6 +439,7 @@ const clientCtx = {
       };
     }
     if (name === 'sessions') return { list: { getSnapshot: () => ({ byId: { 'sess-main': { id: 'sess-main', retainedBy: { mainView: 1 } } } }) } };
+    if (name === 'workspaces') return { list: { getSnapshot: () => ({ items: [{ workspaceId: 'ws-uuid-1', sessionIds: ['sess-main'] }] }) } };
     return undefined;
   },
   on() { return () => {}; },
@@ -514,6 +525,46 @@ check(clientOpened.includes('sess-client-1'), '建好后在主视图打开它', 
 
 const planButtonNow = planButtonsOf(tree)[0];
 check(String(planButtonNow?.props?.className ?? '').includes(' on'), '该任务已经有计划对话 → 按钮标成已绑定（on）');
+const firstPlanText = String(clientPrompt?.content?.[0]?.text ?? '');
+check(firstPlanText.includes(profilePlanSection), '首条消息带上 profile 里配的 plan 模式口径', firstPlanText);
+
+
+/* ------------------------------------------------ 没装 dsh-plan-mode 的 profile */
+// 面板是插件自己的功能：profile 里没有 plan 模式插件时，也要能开计划对话——
+// 口径由首条消息自带的 NO_POLICY_POLICY 兜底，而不是弹一句「没配 plan 模式」就作罢。
+// profile 换成「只有 dsh-plan-mode 之外的行」，并重新 apply 一次（语言服务换了绑定）。
+profilePlanSection = '';
+globalThis.__DSH_BOOT__ = { patch: { insert: [{ id: 'jira-work-overview', name: 'dsh-jira-work-overview' }] } };
+clientListItems.push({
+  key: 'APP-3', project: 'APP', summary: '导出 CSV', status: 'To Do', category: 'new',
+  type: 'Task', priority: '', sprintId: null, sprint: '', due: '', updated: '2026-11-19',
+  labels: [], parent: '', parentKey: '', parentSummary: '', epicKey: '', epicSummary: '',
+  url: 'https://example.atlassian.net/browse/APP-3',
+});
+clientMod.apply(clientCtx);
+/* 列表是靠面板标题栏的「刷新」重新拉的（与用户手动刷新同一个入口）：点它，第二张卡就进列表了。 */
+const refreshButton = () => collectButtons(render()).find((row) => row.props?.title === '刷新');
+check(Boolean(refreshButton()), '面板标题栏有「刷新」按钮', refreshButton()?.props?.title);
+refreshButton()?.props?.onClick?.();
+await settle(() => false);
+let rows = planButtonsOf(render());
+for (let i = 0; i < 120 && rows.length < 2; i += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  rows = planButtonsOf(render());
+}
+check(rows.length === 2, '列表里出现了第二条可点的「计划」', String(rows.length));
+if (rows.length >= 2) {
+  const callsBefore = clientRemoteCalls.length;
+  await rows[1].props.onClick({ preventDefault() {}, stopPropagation() {} });
+  console.log('  [trace] 点击后调用:', clientRemoteCalls.slice(callsBefore).map((call) => call.call + (call.message ? `(${call.message})` : '')).join(' → '));
+  await settle(() => clientRemoteCalls.slice(callsBefore).some((call) => call.call === 'prompt'));
+  const fresh = clientRemoteCalls.slice(callsBefore);
+  console.log('  [trace] 点击后收尾:', fresh.map((call) => call.call).join(' → '));
+  const noPolicyPrompt = fresh.find((call) => call.call === 'prompt');
+  const noPolicyText = String(noPolicyPrompt?.content?.[0]?.text ?? '');
+  check(fresh[0]?.call === 'create', '没装 plan 模式插件也照样建出计划对话（不再被前置校验挡住）', fresh.map((call) => call.call).join(' → '));
+  check(noPolicyText.includes('plan 模式') && noPolicyText.includes('只汇报'), '首条消息自带 plan 口径兜底', noPolicyText.split('\n').filter((line) => /plan 模式|只汇报/.test(line)).join(' / '));
+}
 
 globalThis.fetch = realFetch;
 console.log(failed === 0 ? '\n=== 计划对话测试：全部通过 ===' : `\n=== 计划对话测试：${failed} 项失败 ===`);
