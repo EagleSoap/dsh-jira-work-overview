@@ -19,7 +19,7 @@
 DSH 用**安装 spec** 装插件 —— 凡是 `pnpm add` 能吃的写法都行（registry 包名、git 地址、tarball、绝对路径）。选一个：
 
 ```bash
-# 1) 从 npm 装（0.14.0 起已发布；要钉版本就在后面写 @0.15.1）
+# 1) 从 npm 装（0.14.0 起已发布；要钉版本就在后面写 @0.16.0）
 plugin_manager install_bundle(target="dsh-jira-work-overview")
 
 # 2) 直接从 GitHub 装（不需要 npm 发布）

@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-20
+
 ### Added
 
 - **任务行的「计划」按钮：在项目绑定的工作区里开一条 plan 模式会话。** 每条任务末尾多一个 `☰ 计划`，
@@ -29,9 +31,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
     workspace / agents / settings 全是桩）：建在绑定的工作区、`/plan` 先于第一条消息、首条消息带标记与
     「只汇报 / 不明确就中断」两条规则、二次点击不新建、按标记找回、缺口清单、参数报错、面板按钮与
     `on` 状态。
-
-### Added
-
 - **删掉一条计划对话**：已计划过的任务行在「计划」旁多一个 `×`，点了走基座的工作区归档
   （`remote.workspace.archiveSession`，与侧栏右键「归档」同一条通道）并清掉绑定；这一行回到未计划状态，
   再点「计划」是新建一条。host 路由 `POST /api/jira-work-overview/plan` 新增 `drop` 动作。
@@ -95,6 +94,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - `test/dsh-jira-search.mjs`（离线，21 项断言：全文 / key / browse URL、JQL 转义、`--status` 组合、
   `approximate-count` 的 `AND project = …`、空搜索回落）与 `test/dsh-jira-visual.mjs` 新增 K 段
   （放大镜 → 输入 → 回车 → 按迭代分组 → 清除 / Esc）。
+- **README 截图补上这一版的新功能**：`docs/images/` 新增 `panel-search`（面板里搜「结算」/ `checkout`，命中按迭代分组）、
+  `panel-epic`（按 epic 分组、跨项目组头）与 `panel-plan`（`☰ 计划` 的已绑定 / 未绑定两种状态），中英各一套；
+  `panel` / `panel-watch` 也重出——图上现在带 `↳ epic …` 从属行。出图脚本 `test/dsh-jira-shot.mjs` 走真实交互
+  （点放大镜 → 输入 → 回车并断言命令面收到 `--search=`；点「按 epic」并断言三个组头），截图前还会用无头 Chrome
+  **按真 CSS 量一遍行高**再重排，组头与带从属关系的行因此落在浏览器里的真实位置。
 
 ## [0.15.1] - 2026-11-19
 
