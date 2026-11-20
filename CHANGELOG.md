@@ -32,6 +32,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Fixed
 
+- **「计划」建会话改走 `sessions` 会话服务，不再直连 `remote.session`**：插件没在 `ctx.inject` 里声明
+  `remote`，真机上一点就抛 `cannot get property "remote.session" without inject`。现在用基座客户端常驻的
+  `sessions.create({ workspaceId })` 建会话，再用 `sessions.using(id, …)` 拿会话对象、依次 `command('/plan')`
+  与 `prompt([…], 'queue', …, requestId)`（与聊天框同一条路：CATALOG 立刻更新、新会话可当场落位）。
 - **「计划」不再要求 profile 里装 plan 模式插件**：点在没装 `@deepseek-ai/dsh-plan-mode`（或其 `section`
   为空）的 profile 上会直接报「这个 profile 没有配置 plan 模式的工作方式」。现在口径按
   settings 覆盖 → 面板宿主配置视图 → 靴子数据里的 profile 行依次取；都没有时由第一条消息自带一份

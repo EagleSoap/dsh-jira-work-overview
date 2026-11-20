@@ -1249,26 +1249,36 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 等刚建出来的会话能接收消息：Host 侧 compose 完 agent 之前，prompt 会报
-     * `session/not-found`（会话已建、agent 还没注册）。最多等几秒就报错，不无限挂。
+     * 往刚建好的会话里「先 /plan 再投递任务」。
+     *
+     * 走会话服务而不是 remote：`sessions.using(id, …)` 拿到的是会话对象（首次会顺带打开历史，
+     * 失败会抛），它的 `command()` 与 `prompt(内容, mode, signal, requestId)` 就是聊天框用的那两个方法。
+     * 建会话后 agent 是异步注册的，`using` 打开历史时可能先撞上 not-found，所以整段按次数重试。
      */
-    async function promptWithRetry(remoteSession, sessionId, text) {
+    async function planSessionSend(sessionsService, sessionId, text) {
       let last;
       for (let attempt = 0; attempt < PLAN_POLL_LIMIT; attempt += 1) {
         try {
-          await remoteSession.prompt({
-            requestId: newPlanRequestId(),
-            sessionId,
-            content: [{ type: 'text', text }],
-            mode: 'queue',
+          const done = await sessionsService.using(sessionId, { source: 'mainView' }, async (reference) => {
+            const session = reference?.binding?.session;
+            if (!session) return false;
+            if (typeof session.command === 'function') {
+              const plan = await session.command('/plan');
+              // 命令没被认出来（这个 profile 没装 plan 模式）也不拦：首条消息自带兜底口径。
+              if (plan && plan.ok === false) return false;
+            }
+            const result = await session.prompt([{ type: 'text', text }], 'queue', undefined, newPlanRequestId());
+            if (result && result.ok === false) throw new Error(String(result.error?.message ?? result.error?.code ?? 'prompt rejected'));
+            return true;
           });
-          return;
+          if (done === false) last = new Error('plan command rejected');
+          else return;
         } catch (error) {
           last = error;
           const code = String(error?.code ?? error?.rpcError?.code ?? '');
-          if (code !== 'session/not-found' && !/not found/i.test(String(error?.message ?? ''))) throw error;
-          await sleep(PLAN_POLL_MS);
+          if (code !== 'session/not-found' && !/not found|Session reference/i.test(String(error?.message ?? ''))) throw error;
         }
+        await sleep(PLAN_POLL_MS);
       }
       throw last ?? new Error('timeout');
     }
@@ -1291,13 +1301,18 @@ window.__ModuleLoader__.load({
         // （NO_POLICY_POLICY），不因为「宿主没配」就拒绝开对话。
         const policy = planPolicyText();
 
-        const remoteSession = runtime.ctx && typeof runtime.ctx.get === 'function'
-          ? runtime.ctx.get('remote')?.session
+        // 前端直连要用的是「会话服务」，不是 `remote.session`：
+        // remote 命名空间每个包都得自己 inject 进来才拿得到（这里根本没 inject，硬取会抛
+        // `cannot get property "remote.session" without inject`）。`sessions` 是基座在客户端
+        // 常驻的会话对象层（侧栏、聊天框都走它），它内部才持有 remote，并且多做三件事：
+        // CATALOG 立刻更新（侧栏能看见）、新会话立刻可 retain（能落位）、prompt/command 按
+        // 「Session 对象」语义发（带 requestId、回执与会话状态挂钩）。
+        const sessionsService = runtime.ctx && typeof runtime.ctx.get === 'function'
+          ? runtime.ctx.get('sessions')
           : undefined;
-        // 只认完整的那条路：建会话 + 执行 /plan。缺一个就走 host 路由（那边同样顺序执行）。
-        const canCreateDirectly = Boolean(remoteSession)
-          && typeof remoteSession.create === 'function'
-          && typeof remoteSession.commands?.execute === 'function';
+        const canCreateDirectly = Boolean(sessionsService)
+          && typeof sessionsService.create === 'function'
+          && typeof sessionsService.using === 'function';
 
         // 1) 本地绑定优先：命中就直接打开，绝不新建。
         const bound = plans.sessions[key];
@@ -1326,13 +1341,12 @@ window.__ModuleLoader__.load({
         //    因为 host 那边会把同一条会话重新用来接着投递。
         if (canCreateDirectly) {
           try {
-            const created = await remoteSession.create({ workspaceId });
-            const sessionId = created?.sessionId;
+            const created = await sessionsService.create({ workspaceId });
+            const sessionId = created?.sessionId ?? created;
             if (!sessionId) throw new Error(t('planNoSession'));
             await postPlan({ action: 'link', issue: key, sessionId });
             openPlanSession(sessionId);
-            await remoteSession.commands.execute(sessionId, '/plan', [], undefined);
-            await promptWithRetry(remoteSession, sessionId, planMessage(item, policy));
+            await planSessionSend(sessionsService, sessionId, planMessage(item, policy));
             flash(t('planCreated', { key }));
             return;
           } catch (error) {

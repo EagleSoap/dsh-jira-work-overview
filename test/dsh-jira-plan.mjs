@@ -372,6 +372,30 @@ let profilePlanSection = '你在 plan 模式：先规划，用户敲定后再执
 
 /* 客户端上下文：remote.session 走真路（建会话 + /plan + prompt），并留下调用记录。 */
 const clientRemoteCalls = [];
+/* 会话对象层（对应基座的 `sessions` 服务）：面板只准走这里建会话 / 发命令 / 投消息。 */
+let clientSessionSeq = 0;
+const clientSessionsService = {
+  list: { getSnapshot: () => ({ byId: { 'sess-main': { id: 'sess-main', retainedBy: { mainView: 1 } } } }) },
+  async create(request) {
+    clientRemoteCalls.push({ call: 'create', ...request });
+    clientSessionSeq += 1;
+    return `sess-client-${clientSessionSeq}`;
+  },
+  async using(sessionId, options, operation) {
+    clientRemoteCalls.push({ call: 'using', sessionId, source: options?.source });
+    const session = {
+      async command(line) {
+        clientRemoteCalls.push({ call: 'command', sessionId, name: line });
+        return { ok: true, value: { matched: true } };
+      },
+      async prompt(content, mode, signal, requestId) {
+        clientRemoteCalls.push({ call: 'prompt', sessionId, content, mode, requestId });
+        return { ok: true, value: { accepted: true } };
+      },
+    };
+    return operation({ sessionId, binding: { sessionId, session } });
+  },
+};
 const clientOpened = [];
 const clientCtx = {
   get(name) {
@@ -407,13 +431,11 @@ const clientCtx = {
       };
     }
     if (name === 'remote') {
+      // 回归护栏：面板不该去取 `remote.session` —— 插件没在 ctx.inject 里声明 remote，
+      // 真机上这会直接抛 `cannot get property "remote.session" without inject`。
       return {
-        session: {
-          async create(request) { clientRemoteCalls.push({ call: 'create', ...request }); return { sessionId: 'sess-client-1' }; },
-          commands: {
-            async execute(sessionId, name, args) { clientRemoteCalls.push({ call: 'command', sessionId, name, args }); return { ok: true }; },
-          },
-          async prompt(request) { clientRemoteCalls.push({ call: 'prompt', ...request }); return { accepted: true }; },
+        get session() {
+          throw new Error('cannot get property "remote.session" without inject');
         },
       };
     }
@@ -438,7 +460,7 @@ const clientCtx = {
         getSnapshot: () => ({ active: 'zh' }),
       };
     }
-    if (name === 'sessions') return { list: { getSnapshot: () => ({ byId: { 'sess-main': { id: 'sess-main', retainedBy: { mainView: 1 } } } }) } };
+    if (name === 'sessions') return clientSessionsService;
     if (name === 'workspaces') return { list: { getSnapshot: () => ({ items: [{ workspaceId: 'ws-uuid-1', sessionIds: ['sess-main'] }] }) } };
     return undefined;
   },
@@ -556,10 +578,8 @@ check(rows.length === 2, '列表里出现了第二条可点的「计划」', Str
 if (rows.length >= 2) {
   const callsBefore = clientRemoteCalls.length;
   await rows[1].props.onClick({ preventDefault() {}, stopPropagation() {} });
-  console.log('  [trace] 点击后调用:', clientRemoteCalls.slice(callsBefore).map((call) => call.call + (call.message ? `(${call.message})` : '')).join(' → '));
   await settle(() => clientRemoteCalls.slice(callsBefore).some((call) => call.call === 'prompt'));
   const fresh = clientRemoteCalls.slice(callsBefore);
-  console.log('  [trace] 点击后收尾:', fresh.map((call) => call.call).join(' → '));
   const noPolicyPrompt = fresh.find((call) => call.call === 'prompt');
   const noPolicyText = String(noPolicyPrompt?.content?.[0]?.text ?? '');
   check(fresh[0]?.call === 'create', '没装 plan 模式插件也照样建出计划对话（不再被前置校验挡住）', fresh.map((call) => call.call).join(' → '));
