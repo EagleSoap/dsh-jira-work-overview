@@ -24,7 +24,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { execFileSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 
 /* --------------------------------------------------------------- 参数 / 路径 */
 
@@ -40,7 +40,47 @@ const THEME = argOf('theme', 'light') === 'dark' ? 'dark' : 'light';
 const ONLY = argOf('only', '').trim();
 const OUT_DIR = resolve(WS, argOf('out', 'docs/images'));
 const SHOT_DIR = join(tmpdir(), 'dsh-jira-shot');
-const CHROME = process.env.DSH_JIRA_CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+/* 无头浏览器：DSH_JIRA_CHROME 优先；否则按平台在常见安装位置里找第一个存在的
+   （macOS 的 .app、Windows 的 Program Files 三处、Linux 的 PATH 命令名与 snap / flatpak 路径）。
+   Chrome 的新版无头模式是 `--headless=new`，所以只认 Chrome / Chromium，不认 Edge。 */
+function findChrome() {
+  const explicit = String(process.env.DSH_JIRA_CHROME || '').trim();
+  if (explicit) return explicit;
+  let home = '';
+  try { home = homedir(); } catch { home = ''; }
+  const candidates = process.platform === 'darwin'
+    ? [
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      join(home, 'Applications/Google Chrome.app/Contents/MacOS/Google Chrome'),
+      '/Applications/Chromium.app/Contents/MacOS/Chromium',
+    ]
+    : process.platform === 'win32'
+      ? [
+        join(process.env.ProgramFiles || 'C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+        join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+        join(process.env.LOCALAPPDATA || join(home, 'AppData', 'Local'), 'Google', 'Chrome', 'Application', 'chrome.exe'),
+      ]
+      : [
+        '/usr/bin/google-chrome',
+        '/usr/bin/google-chrome-stable',
+        '/usr/bin/chromium',
+        '/usr/bin/chromium-browser',
+        '/snap/bin/chromium',
+        '/var/lib/flatpak/exports/bin/com.google.Chrome',
+        join(home, '.local/share/flatpak/exports/bin/com.google.Chrome'),
+      ];
+  const found = candidates.find((file) => file && existsSync(file));
+  if (found) return found;
+  for (const name of ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser']) {
+    try {
+      const resolved = execFileSync(process.platform === 'win32' ? 'where' : 'which', [name], { stdio: ['ignore', 'pipe', 'ignore'] })
+        .toString().split(/\r?\n/)[0].trim();
+      if (resolved) return resolved;
+    } catch { /* 没装就下一个 */ }
+  }
+  return candidates[0];
+}
+const CHROME = findChrome();
 const ASAR = process.env.DSH_JIRA_ASAR || '/Applications/DeepSeek Harness.app/Contents/Resources/app.asar';
 const THEME_CSS = [
   `${ASAR}/dsh/node_modules/@deepseek-ai/dsh-client-ui-theme/src/styles/base.css`,

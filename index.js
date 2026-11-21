@@ -2569,7 +2569,8 @@ const EDITOR_CANDIDATES = [
 
 /** 在 PATH 里找命令（Linux 的探测：不必完美，找到即可）。 */
 function findEditorOnPath(cmd, existsSync) {
-  const dirs = String(process.env.PATH ?? '').split(':').filter(Boolean);
+  // PATH 分隔符按平台取：Windows 上 `;`（盘符里的 `:` 不能当分隔符），类 Unix 上是 `:`。
+  const dirs = String(process.env.PATH ?? '').split(process.platform === 'win32' ? ';' : ':').filter(Boolean);
   for (const dir of dirs) {
     const guess = `${dir.replace(/[\\/]+$/, '')}/${cmd}`;
     try {

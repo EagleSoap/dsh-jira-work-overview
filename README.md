@@ -166,9 +166,17 @@ A status **you** changed — from the panel dropdown or `jira_transition` — is
 | --- | --- | --- | --- |
 | Notifications | `osascript` | PowerShell Toast (`-EncodedCommand`) | `notify-send` |
 | Open `cordis.patch.yml` | `open` / `open -R` / osascript app chooser | `cmd /c start` / `rundll32 … OpenAs_RunDLL` / `explorer /select,` | `xdg-open` |
+| Editor picker | scans `/Applications`, `~/Applications`, `/System/Applications` for `.app` bundles | `where` + `%LOCALAPPDATA%` / `%ProgramFiles%`; `PATH` split on `;` | looks for the command name on `PATH`; `PATH` split on `:` |
 | Host paths | POSIX | avoid spaces in the install path — DSH records it as a `link:` dependency | POSIX |
 
 The web half only uses standard React/DOM APIs (`color-mix`, `createPortal` are supported on all three).
+
+**What is real and what is not, on Linux:** every platform difference — notifications, opening `cordis.patch.yml`,
+the editor picker and its `PATH` lookup, fonts and scrollbars — is implemented by `process.platform` dispatch and
+covered by the offline suites, **but it has never been run on a Linux machine** (development happens on macOS). If
+something misbehaves there, open an issue with the panel's error text. The one Linux-specific gap by design:
+the "choose application" picker has no desktop-portal equivalent, so only `xdg-open` / the editor picker / a
+freely typed command are offered.
 
 ## Internationalization
 

@@ -380,6 +380,16 @@ issue 摘要、状态名（`In Review`、`已完成`…）、父需求名、标�
 | 自由输入应用名 / 路径 | `open -a <你填的> -- <path>` | 存在的 `.exe` 直接执行，否则 `cmd /c start "" <你填的> <path>` | `execFile(<你填的>, [path])` |
 | 界面字体 | 走宿主变量，回退 `-apple-system` / `PingFang SC` | 回退 `Segoe UI` / `Microsoft YaHei`；等宽 `Consolas` / `Cascadia Mono` | 回退 `system-ui` |
 | 项目 tab 横向滚动 | 隐藏滚动条 + 两侧 `‹ ›` 按钮 | 细滚动条（Windows 没有 overlay scrollbar，**不能藏**）+ 两侧 `‹ ›` 按钮 | 同 Windows |
+| `PATH` 分隔符（编辑器探测） | `:` | `;`（盘符里的 `:` 不能当分隔符） | `:` |
+
+编辑器候选表里给了 Linux 命令名的：VS Code（`code`）、Cursor（`cursor`）、Windsurf（`windsurf`）、
+Zed（`zed`）、Sublime Text（`subl`）、gedit（`gedit`）——**在 `PATH` 里找到才画按钮**，找不到就不画，不猜。
+
+**Linux 上的实现状态要说清楚**：平台的差异全部按 `process.platform` 分派实现，并有离线套件覆盖，
+**但从来没有在 Linux 机器上真跑过**（开发一直在 macOS）。所以「Windows / Linux 支持」是**实现了、未经实机验证**，
+不是「已在三平台验证通过」。Linux 上只有一处是设计上的缺口：「选择打开方式」没有桌面门户的等价物，
+只提供 `xdg-open` / 编辑器直选 / 自由输入命令三种方式。「在文件管理器中显示」在 Linux 上退化成打开所在目录
+（没有统一的「选中这个文件」动作）。
 
 
 **在 Windows 上装这个插件的注意点**
@@ -395,7 +405,9 @@ issue 摘要、状态名（`In Review`、`已完成`…）、父需求名、标�
 4. 企业网要走代理时：Node 的 `fetch` **默认不读** `HTTPS_PROXY`；给 DSH 进程配 `NODE_USE_ENV_PROXY=1`
    （Node 24 的 `--use-env-proxy`）或改用能直连 Jira 的网络。
 5. 开发用的 `test/*.mjs` 已改成用 `os.tmpdir()`（可用 `DSH_JIRA_TMP` / `DSH_JIRA_ENV_FILE` 覆盖），
-   但它们依赖从 `app.asar` 里抽出来的宿主 peer 依赖副本，仍建议在 macOS/Linux 上跑测试、Windows 上只跑插件。
+   没有 env 文件时会自己开一个空的（凭据可用 `JIRA_API_TOKEN` / `JIRA_BASE_URL` / `JIRA_EMAIL` 环境变量给，
+   连不上站点就 `SKIP`），但它们依赖从 `app.asar` 里抽出来的宿主 peer 依赖副本，仍建议在 macOS/Linux 上跑测试。
+   出图脚本 `test/dsh-jira-shot.mjs` 现在会按平台找无头 Chrome（也可用 `DSH_JIRA_CHROME` 指定）。
 
 ## 配置
 
