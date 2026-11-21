@@ -190,6 +190,98 @@ The plugin's own copy follows the DSH language setting; English and Chinese ship
 
 Behind a corporate proxy on Windows, DSH needs the proxy env vars it was started with (`NODE_USE_ENV_PROXY=1`) — the plugin itself never talks to the network outside `fetch`.
 
+## Versions and upgrades
+
+The current version is **0.16.0** (2026-11-20). The changelog records 30 versions (from 0.1.0); GitHub carries **9 tags / releases** (0.13.0 → 0.16.0), and **0.13.4 was the first public release** — the earlier 0.1.0–0.12.0 exist only in `CHANGELOG.md` and the project notes, with no commit or tag behind them, so "an older version" means **0.13.0 or later**. Every release is described in [CHANGELOG.md](CHANGELOG.md).
+
+### Why people still install older versions
+
+- **The package was not on npm before 0.14.0.** Until then the only ways in were a GitHub URL or a local path — `plugin_manager install_bundle(target="dsh-jira-work-overview")` simply could not resolve. And an existing install never upgrades itself: whichever spec you installed stays pinned.
+- **0.13.0 / 0.13.1 never loaded their browser half** (see below): the sidebar entry, the panel and the token configuration were all missing, while `plugin_manager` still showed `fiberPhase: "active"` — easy to read as "the plugin is broken". Upgrade to 0.13.2+.
+- **0.15.0 and earlier report "Reading the token state failed: HTTP 404"** in the configure dialog, and the badge, the status dropdown and the watch form fail with it (one root cause). Fixed in 0.15.1; upgrading from 0.15.1 on **keeps your email / token**.
+
+### Version history
+
+| Version | Date | Kind | In one line |
+| --- | --- | --- | --- |
+| 0.1.0 | 2026-11-18 | first | `jira_my_work` / `jira_issue` tools, the `Config` card, token from the credential store |
+| 0.2.0 | 2026-11-18 | feature | `/jira` slash command (no model message, no tokens), scope / issue key / raw JQL |
+| 0.3.0 | 2026-11-18 | feature | the **client panel** in the left sidebar, fed by `ctx.remote.commands.execute('/jira --json')` |
+| 0.4.0 | 2026-11-18 | feature | **sprint** grouping (collapsible), sprint field resolved via `schema.custom` |
+| 0.5.0 | 2026-11-18 | feature | **live watch**: background polling, system notifications, unread badge, "what changed" banner |
+| 0.6.0 | 2026-11-18 | feature | **status transitions** from the panel + the `jira_transition` tool |
+| 0.7.0 | 2026-11-18 | feature | High / Highest row highlighting |
+| 0.7.1–0.7.3 | 2026-11-18 | fix / trim | drop the unreliable "active sprint" line; abort the previous request on switch |
+| 0.8.0 | 2026-11-18 | feature | **API token** editable in the plugin's own config page (masked, `/myself` check, rejected pairs never stored) |
+| 0.8.1–0.8.6 | 2026-11-18 | feature | several config entry points, token modal, watch switch → **applies as you change it**, **project tabs** |
+| 0.8.7–0.8.10 | 2026-11-18 | feature | editable login email, **Windows / Linux support**, UI language, configurable fetch size |
+| 0.9.0 | 2026-11-18 | feature | **internationalization** (zh / en dictionaries following the DSH language) |
+| 0.10.0 | 2026-11-18 | feature | accurate totals (`projectTotals`), editor picker; JQL conditions inserted before `ORDER BY` |
+| 0.11.0 | 2026-11-18 | feature | single-select **status filter** (server-side `--status`), accurate total from `approximate-count` |
+| 0.12.0 | 2026-11-18 | feature | **virtualized list** (`@tanstack/react-virtual`), `maxResults: 0` = unlimited |
+| 0.13.0 | 2026-11-18 | release prep | package renamed `dsh-jira-work-overview`, MIT, neutral defaults only in `cordis.patch.yml` |
+| 0.13.1 | 2026-11-18 | cleanup | removed three stale test suites |
+| 0.13.2 | 2026-11-18 | **fix** | the browser half never loaded (bundle id ≠ package name) |
+| 0.13.3 | 2026-11-18 | fix | group headers overlapped after "collapse all"; scrolling flashed the macOS screen |
+| 0.13.4 | 2026-11-18 | **first public** | desensitized: no personal values left in the repo, the docs or the git history |
+| 0.14.0 | 2026-11-19 | feature | highlight follows **Jira's own priority order**; **first npm release** |
+| 0.15.0 | 2026-11-19 | feature | transitions update **in place**, your own changes no longer notify you, typed failure hints |
+| 0.15.1 | 2026-11-19 | **fix** | the four `/api` routes were never registered in a real host (404) |
+| 0.16.0 | 2026-11-20 | feature | **site-wide search**, **group by epic**, the **计划** (plan) button on every row |
+
+> 0.1.0–0.12.0 all happened on 2026-11-18; tags and GitHub Releases start at 0.13.0.
+> To install an older version: `plugin_manager install_bundle(target="github:EagleSoap/dsh-jira-work-overview#v0.13.2")`, or pin the npm version with `target="dsh-jira-work-overview@0.14.0"` (the earliest version on npm is 0.14.0).
+
+### Upgrading
+
+There is no "check for updates" button — upgrading means reinstalling the same spec:
+
+```bash
+plugin_manager install_bundle(target="dsh-jira-work-overview")  # resolves the newest release when already installed
+```
+
+then **refresh the DSH page** (Cmd/Ctrl+R). Upgrading never touches your profile patch or the token in the credential store; since 0.13.0 `cordis.patch.yml` ships neutral defaults only, and your personal values (site / email / project key / board id) always live in your own profile.
+
+## Fixed issues
+
+Every user-visible defect, newest first (implementation detail is in the matching [CHANGELOG.md](CHANGELOG.md) entry).
+
+| Version | Symptom | Cause / fix |
+| --- | --- | --- |
+| 0.16.0 | `×` fails with `归档计划对话失败：no workspaces service` / `这个 profile 没有提供工作区归档通道` | wrong facade: `ctx.get('workspaces')` is empty (the registry is `workspaceRegistry`) and the remote namespace is `workspace`, not `workspaces`. Now tries `remote.workspace.archiveSession` → the workspace registry itself → `connection.call('workspace/archiveSession')` |
+| 0.16.0 | after deleting a plan session, 计划 reopens the archived one | the panel now fetches the binding with `force: true` (mapping only, no log scan) and the fresh-create path passes `skipToken: true` |
+| 0.16.0 | 计划 throws `cannot get property "remote.session" without inject` | now uses the base's `sessions.create({ workspaceId })` + `sessions.using(id, …)` — the same path as the chat box |
+| 0.16.0 | 计划 errors out when no plan-mode plugin is installed | policy resolved from settings → the panel's host config view → the profile row in the boot data, with a built-in fallback in the first message |
+| 0.16.0 | the epic view only ever shows the "no epic" group | a site can expose both `gh-epic-label` (always empty) and `gh-epic-link` (carries the key); an array-order `find` picked the empty one. Now resolved by schema priority (link first) |
+| 0.15.1 | "Reading the token state failed: HTTP 404", and the badge, status dropdown and watch form with it | the plugin read `ctx.get('connection')` synchronously in `apply()` while `client-connection`'s `apply` is async, so the same load batch got `undefined` — the four exact `/api` Fetch routes were **never registered**. Now `ctx.inject(['connection'], …)`; the offline stub mirrors real host timing |
+| 0.15.0 | a transition re-fetched hundreds of rows; your own change notified you again | the row + counts are updated in place; an expectation (key → from / to / category, 24h TTL) written around the POST absorbs the matching poll diff |
+| 0.15.0 | the panel pasted raw errors with no way forward | `--json` failures return `ok:false` + `error.code` (`no_credential` / `credential_unreadable` / `no_email` / `no_base_url` / `auth` / `network` / `http` / `not_json` / `unknown`); the panel shows a title plus **Configure** / **Retry** |
+| 0.13.4 | the author's real project key and token fragments appeared in docs, screenshots and tests | replaced with the made-up `APP` / `ATAT…0000`; `projectKey` defaults to `''`; tests derive their own path; the **git history was rewritten** (old SHAs are void) |
+| 0.13.3 | after "collapse all", a group header's title and date overlapped | `@tanstack/react-virtual`'s default `getItemKey` is `index => index`, so heights are cached by index; now keyed by identity (`g:<group id>` / `i:<issue key>`) and `estimateSize` estimates per kind (header 64 / row 32) |
+| 0.13.3 | scrolling the list flashed the whole macOS screen | a full-window `backdrop-filter: blur(2px)` flashes on scroll repaint in Electron; the masks now dim without blurring |
+| 0.13.2 | after installing, the sidebar entry, the panel and every token config page were **missing**, yet `plugin_manager` said `active` | `client.js` still registered the old `@local/…` bundle id, so the host's client boot graph could not match it; `test/dsh-jira-bundle-id.mjs` pins the three names together |
+| 0.13.1 | three test suites had been red for a while | they predated the 0.7 panel redesign and are covered by `dsh-jira-visual.mjs` / `dsh-jira-credential.mjs`; deleted |
+| 0.13.0 | a missing site only said "no base URL" | `err.noBaseUrl` now says where to set it |
+| 0.12.0 | not all items were fetched / the page got slow | virtualization + `maxResults: 0` pages to the end; safety net 5000 items / 50 pages / one `timeoutMs` budget, partial results honestly carry `hasMore: true` |
+| 0.11.0 | "N items" disagreed with what was on screen | the header now uses Jira's `approximate-count`; `--status` is applied server-side so the list and the count cannot disagree |
+| 0.10.0 | adding a status condition produced invalid JQL and a silently empty `projectTotals` | conditions must be inserted **before** `ORDER BY` (appending after it is HTTP 400); now through `withJqlClause` |
+| 0.9.0 | the UI language ignored the DSH language setting | resolved `DSH_JIRA_LANG` → per-call → config → host `locale.preference` → the panel's reported language → system env → ICU → `en` |
+| 0.8.8 | editing the email had no effect | it read the startup snapshot; now read through `liveSetting()` per operation |
+| 0.8.7 | a wrong email meant editing `cordis.patch.yml` | editable in the dialog, verified against `/rest/api/3/myself` as a pair with the token |
+| 0.8.6 | the test predicate matched `jmw-rowmeta` as a row | tightened to an exact class match |
+| 0.8.4–0.8.5 | the dialog was not centred / white on white in the dark theme / overlays survived closing the panel | restored the classes a CSS rewrite had dropped; button colours are hardcoded (`--dsw-alias-brand-primary` is near-white in the dark theme); `closeAll()` moved into the shared snapshot |
+| 0.8.0–0.8.3 | the token was file-only; settings needed a restart | the token moved into the plugin config page; watch settings use `.volatile()` + `settings.mutate` and apply on `loader/volatile-update` |
+| 0.7.3 | a fast project / status switch let a stale response win | the previous request is aborted and a sequence number discards stale responses |
+| 0.7.1 | the tool output's "active sprint" did not match reality | the board's sprint state is not reliable; the line is gone |
+| 0.1.0–0.6.0 | early gaps | see the matching `CHANGELOG.md` entries |
+
+### Where to start
+
+1. **No sidebar entry**, or `plugin_manager` says `active` while the UI is empty → upgrade to **0.13.2 or later** and refresh.
+2. The configure dialog reports **HTTP 404** / the badge never updates → upgrade to **0.15.1 or later**.
+3. The panel says there is no token / the token was rejected / it cannot read it → use **Configure** in the hint (or at the right of the panel title); you never have to edit the profile file.
+4. A raw error from `/jira` in text mode is **on purpose** — the command surface should show the real reason; the panel uses the typed `--json` hints instead.
+
 ## Security and privacy
 
 - The API token lives in the **DSH credential store**; the plugin only ever returns a masked form + its source, never the value. There is no place in the code where a full token is logged or rendered.

@@ -437,6 +437,99 @@ issue 摘要、状态名（`In Review`、`已完成`…）、父需求名、标�
 也在这里改，`baseUrl` / `email` / 超时在「Jira 连接 / 查询」两组里只读列出；要改只读项，
 直接改 `cordis.patch.yml` 那一行（或让 agent 改）后重新加载插件。
 
+## 版本与升级
+
+当前版本 **0.16.0**（2026-11-20）。`CHANGELOG.md` 记了 30 个版本（0.1.0 起），GitHub 上有 **9 个 tag / Release**（0.13.0 → 0.16.0），**0.13.4 是第一个公开版本**——更早的 0.1.0–0.12.0 只存在于 `CHANGELOG.md` 与项目记录里，没有对应的提交与 tag，所以「以前的版本」= **0.13.0 及以后**。逐版的完整说明见 [CHANGELOG.md](CHANGELOG.md)。
+
+### 为什么有人还在装以前的版本
+
+- **0.14.0 之前 npm 上没有这个包**：那段时间只有 GitHub 直装 / 本地路径两种装法，`plugin_manager install_bundle(target="dsh-jira-work-overview")` 会直接找不到包。旧的安装命令不会自己升级——装的是哪个 spec，就一直停在那个版本。
+- **0.13.0 / 0.13.1 的浏览器半边根本不加载**（见下表）：左侧栏入口、面板、令牌配置全都不出现，而 `plugin_manager` 仍显示 `fiberPhase: "active"`，很容易被当成「这个插件坏了」。遇到这种情况先升级到 0.13.2+。
+- **0.15.0 及更早版本的配置页会报「读取令牌状态失败：HTTP 404」**，而且角标、状态下拉、后台监视表单一起失效（同一个根因）。0.15.1 修好；从 0.15.1 起升级**不用重填邮箱 / 令牌**。
+
+### 版本历史
+
+| 版本 | 日期 | 类型 | 一句话 |
+| --- | --- | --- | --- |
+| 0.1.0 | 2026-11-18 | 初版 | `jira_my_work` / `jira_issue` 两个工具、`Config` 卡片、令牌走凭据库 |
+| 0.2.0 | 2026-11-18 | 功能 | `/jira` 斜杠命令（不产生模型消息）、scope / issue key / 原始 JQL 参数 |
+| 0.3.0 | 2026-11-18 | 功能 | 左侧栏 **客户端面板**；数据走 `ctx.remote.commands.execute('/jira --json')` |
+| 0.4.0 | 2026-11-18 | 功能 | 按**迭代**分组（可折叠）、sprint 字段按 `schema.custom` 解析 |
+| 0.5.0 | 2026-11-18 | 功能 | **实时监视**：后台轮询 + 系统通知 + 未读角标 + 「新变化」横幅 |
+| 0.6.0 | 2026-11-18 | 功能 | 面板里**改状态**（工作流 transition）+ `jira_transition` 工具 |
+| 0.7.0 | 2026-11-18 | 功能 | 高 / 最高优先级行底色 |
+| 0.7.1–0.7.3 | 2026-11-18 | 修复 / 精简 | 去掉不可信的「活跃迭代」行；切换时中止上一个请求 |
+| 0.8.0 | 2026-11-18 | 功能 | **API 令牌**在插件自己的配置页里编辑（打码、`/myself` 校验、坏令牌不写入） |
+| 0.8.1–0.8.6 | 2026-11-18 | 功能 | 多个配置入口、令牌弹窗、监视开关 → **改了就生效**、**项目 tab** |
+| 0.8.7–0.8.10 | 2026-11-18 | 功能 | 登录邮箱可编辑、**Windows / Linux 支持**、界面语言、可配置拉取条数 |
+| 0.9.0 | 2026-11-18 | 功能 | **国际化**（中 / 英词典、按 DSH 语言自动切换） |
+| 0.10.0 | 2026-11-18 | 功能 | 准确总数（`projectTotals`）、编辑器直选；修复 JQL 条件插到 `ORDER BY` 之后 |
+| 0.11.0 | 2026-11-18 | 功能 | **状态筛选**（单选、服务端 `--status`）、按 `approximate-count` 的准确总数 |
+| 0.12.0 | 2026-11-18 | 功能 | **虚拟列表**（`@tanstack/react-virtual`）、`maxResults: 0` = 不限制 |
+| 0.13.0 | 2026-11-18 | 发布准备 | 包名改成 `dsh-jira-work-overview`、MIT、`cordis.patch.yml` 只留中性默认值 |
+| 0.13.1 | 2026-11-18 | 清理 | 删掉三个过时的测试套件 |
+| 0.13.2 | 2026-11-18 | **修复** | 浏览器半边不加载：bundle id 与包名不一致 |
+| 0.13.3 | 2026-11-18 | 修复 | 折叠全部后组头错位；滚动时 macOS 整屏闪 |
+| 0.13.4 | 2026-11-18 | **首个公开版** | 去标识化：仓库、文档与 git 历史里不再有作者的个人值 |
+| 0.14.0 | 2026-11-19 | 功能 | 高亮挂到 **Jira 自己的优先级名次**；**首次发布到 npm** |
+| 0.15.0 | 2026-11-19 | 功能 | 改状态**不再全量重拉**、自己改的状态不再通知自己、失败提示按类型 |
+| 0.15.1 | 2026-11-19 | **修复** | 四条 `/api` 路由在真宿主里没注册（404） |
+| 0.16.0 | 2026-11-20 | 功能 | **整站搜索**、**按 epic 分组**、任务行**「计划」**（plan 模式会话） |
+
+> 0.1.0–0.12.0 这 15 个版本都发生在 2026-11-18 同一天；0.13.0 起才有 tag 与 Release。
+> 想装某个旧版本：`plugin_manager install_bundle(target="github:EagleSoap/dsh-jira-work-overview#v0.13.2")`，或从 npm 钉版本 `target="dsh-jira-work-overview@0.14.0"`（npm 上最早的版本是 0.14.0）。
+
+### 升级
+
+面板里没有「检查更新」按钮，升级就是重装一次同一个 spec：
+
+```bash
+plugin_manager install_bundle(target="dsh-jira-work-overview")  # 已装过则拉到最新 tag / 版本
+```
+
+然后**刷新 DSH 页面**（Cmd/Ctrl+R）。升级不会动你的 profile patch 与凭据库里的令牌；0.13.0 以后
+`cordis.patch.yml` 只带中性默认值，个人值（站点 / 邮箱 / 项目键 / 看板 id）一直在你自己的 profile 里。
+
+## 修复记录
+
+按版本倒序列出**用户能感知到的**问题（实现细节见 [CHANGELOG.md](CHANGELOG.md) 对应条目）。
+
+| 版本 | 现象 | 原因 / 处理 |
+| --- | --- | --- |
+| 0.16.0 | 点「×」报 `归档计划对话失败：no workspaces service` / `这个 profile 没有提供工作区归档通道` | 取错了门面：`ctx.get('workspaces')` 拿不到东西（注册表叫 `workspaceRegistry`），遥控命名空间是 `workspace` 不是 `workspaces`。改成依次试 `remote.workspace.archiveSession` → 工作区注册表本体 → `connection.call('workspace/archiveSession')` |
+| 0.16.0 | 删掉计划对话后再点「计划」，打开的是已归档的那条 | 面板取绑定带 `force: true`（只回映射、不翻会话日志），host 现建路径带 `skipToken: true` |
+| 0.16.0 | 点「计划」报 `cannot get property "remote.session" without inject` | 改成用基座常驻的 `sessions.create({ workspaceId })` + `sessions.using(id, …)`，与聊天框同一条路 |
+| 0.16.0 | 没装 plan 模式插件时「计划」直接报错 | 口径按 settings → 面板宿主配置视图 → 靴子数据里的 profile 行依次取，都没有时首条消息自带兜底口径 |
+| 0.16.0 | epic 视图永远只有「无 epic」一组 | 站点同时有 `gh-epic-label`（恒空）和 `gh-epic-link`（带键串），按数组顺序 `find` 命中了空的那个；改成按 schema 优先级找（link 优先） |
+| 0.15.1 | 配置页报「读取令牌状态失败：HTTP 404」；角标、状态下拉、监视表单一起失效 | 插件在 `apply()` 里同步 `ctx.get('connection')`，而 `client-connection` 的 `apply` 是异步的，同一个加载批里只拿到 `undefined` —— 四条 `/api` 精确 Fetch 路由**从未注册**。改成 `ctx.inject(['connection'], …)` 等服务就绪再注册；离线桩改成真宿主时序 |
+| 0.15.0 | 改完状态整个列表重拉几百条；自己改的状态又弹一次通知 | 就地更新那一行并本地重算计数；写入前后记一份期望（key → from / to / 分类，TTL 24h），轮询 diff 命中同一对时静默吸收 |
+| 0.15.0 | 面板把原始报错糊在界面上，不知道该怎么办 | `--json` 失败回 `ok:false` + `error.code`（`no_credential` / `credential_unreadable` / `no_email` / `no_base_url` / `auth` / `network` / `http` / `not_json` / `unknown`），面板按 code 给标题 + 「去配置」/「重试」 |
+| 0.13.4 | 文档 / 截图 / 测试里能看到作者真实项目键与令牌片段 | 统一成虚构的 `APP` / `ATAT…0000`；`projectKey` 默认值改成 `''`；测试不再硬编码本机路径；**git 历史整体重写**（旧 SHA 全部作废） |
+| 0.13.3 | 「折叠全部」后组头的标题与日期叠在一起 | `@tanstack/react-virtual` 的默认 `getItemKey` 是 `index => index`，行高按下标缓存；改成按条目身份（`g:<组 id>` / `i:<issue key>`），`estimateSize` 也按条目类型估（组头 64 / 行 32） |
+| 0.13.3 | 滚动列表时 macOS 整屏闪一下 | 整窗大小的 `backdrop-filter: blur(2px)` 在 Electron 里滚动重绘会闪；遮罩改成只压暗不模糊 |
+| 0.13.2 | 装好插件后左侧栏入口、面板、令牌配置**全都不出现**，`plugin_manager` 却显示 `active` | `client.js` 注册的 bundle id 还是旧的 `@local/…`，与包名不一致，宿主组装客户端启动图时对不上；`test/dsh-jira-bundle-id.mjs` 钉死三处一致 |
+| 0.13.1 | 三个测试套件一直是红的 | 它们早于 0.7 的面板改版，已由 `dsh-jira-visual.mjs` / `dsh-jira-credential.mjs` 覆盖，直接删掉 |
+| 0.13.0 | 没填站点时只说「no base URL」 | 新增 `err.noBaseUrl`，直接告诉你去哪儿填 |
+| 0.12.0 | 条数拉不全 / 页面卡 | 虚拟列表 + `maxResults: 0` 翻到底；安全网 5000 条 / 50 页 / `timeoutMs`，截断时 `hasMore: true` 如实标注 |
+| 0.11.0 | 「共 N 项」与实际条数对不上 | 改用 Jira 的 `approximate-count` 接口；`--status` 走服务端，列表与计数不可能不一致 |
+| 0.10.0 | 加了状态条件后 JQL 非法、`projectTotals` 静默为空 | 条件必须插在 `ORDER BY` **之前**（拼在后面 Jira 回 HTTP 400），统一走 `withJqlClause` |
+| 0.9.0 | 界面语言与 DSH 语言设置不一致 | 语言按 `DSH_JIRA_LANG` → 调用参数 → 配置 → 宿主 `locale.preference` → 面板上报 → 系统环境 → ICU → `en` 依次解析 |
+| 0.8.8 | 改了邮箱不生效 | 读的是启动快照；改成每次走 `liveSetting()` |
+| 0.8.7 | 邮箱写错要改 `cordis.patch.yml` | 配置弹窗里可直接改，并与令牌成对 `/rest/api/3/myself` 校验 |
+| 0.8.6 | 测试把 `jmw-rowmeta` 也当成行 | 谓词改成 `className.startsWith('jmw-row ')` 这类精确匹配 |
+| 0.8.4–0.8.5 | 配置弹窗不居中 / 深色主题下白字白底 / 关面板后浮层残留 | 补齐被 CSS 重写删掉的类；按钮颜色写死（`--dsw-alias-brand-primary` 在深色主题下接近白色）；`closeAll()` 收进共享快照 |
+| 0.8.0–0.8.3 | 令牌只能改文件；改完要重启 | 令牌进插件配置页；监视设置走 `.volatile()` + `settings.mutate`，`loader/volatile-update` 立刻生效 |
+| 0.7.3 | 快速切换项目 / 状态时旧结果盖住新结果 | 上一个请求 `AbortSignal` 中止 + 序号丢弃过期响应 |
+| 0.7.1 | 工具输出里「活跃迭代」跟实际对不上 | 看板的迭代状态不可信，去掉这一行 |
+| 0.1.0–0.6.0 | 早期功能缺失 | 见 `CHANGELOG.md` 对应条目 |
+
+### 排查顺序
+
+1. 左侧栏**没有入口**、或 `plugin_manager` 显示 `active` 但界面是空的 → 先升级到 **0.13.2 以上**并刷新页面。
+2. 配置页报 **HTTP 404**、角标不更新 → 升到 **0.15.1 以上**。
+3. 面板提示「没有令牌 / 令牌被拒 / 读不出令牌」→ 点提示里的「去配置」（或面板标题右侧「配置」）重填；**不用改 profile 文件**。
+4. `/jira` 文本模式返回 `kind:'error'` 的原始报错是**故意的**——命令面本来就该看到真实原因；面板专用的是 `--json` 的分类型提示。
+
 ## 测试（`test/`）
 
 改完代码先跑离线端到端脚本，再装机验证。**这些脚本都用假 DOM / 迷你 React 驱动真实的 `client.js` 与真实的 host `index.js`**，所以不需要打开浏览器：
