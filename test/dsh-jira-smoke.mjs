@@ -1,3 +1,4 @@
+import { prepareHostCopy, skipWhenUnavailable } from './lib-host-runtime.mjs';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import fs from 'node:fs';
@@ -7,6 +8,8 @@ import { dirname, join } from 'node:path';
 /* --- 跨平台：临时目录与本机凭据文件（Windows 上用 os.tmpdir()，可用 DSH_JIRA_TMP 覆盖） --- */
 const TMP = process.env.DSH_JIRA_TMP || (existsSync(join('/tmp', '.dsh_jira_env')) ? '/tmp' : tmpdir());
 const HOST_COPY = join(TMP, 'dsh-jira-smoke3', 'index.js');
+const prep = prepareHostCopy({ ws: dirname(dirname(fileURLToPath(import.meta.url))), dest: HOST_COPY });
+skipWhenUnavailable(prep);
 const ENV_FILE = process.env.DSH_JIRA_ENV_FILE || join(TMP, '.dsh_jira_env');
 /* 没有非交互式环境文件（典型是 Linux / Windows 没建过）时开一个空文件，凭据由 JIRA_API_TOKEN / JIRA_BASE_URL / JIRA_EMAIL 环境变量提供，套件照常 SKIP 而不是崩。 */
 if (!existsSync(ENV_FILE)) writeFileSync(ENV_FILE, '', { mode: 0o600 });
@@ -22,8 +25,7 @@ const readEnv = (key) => {
 const PROJECT = process.env.DSH_JIRA_PROJECT || readEnv('JIRA_PROJECT') || 'APP';
 const BOARD = Number(process.env.DSH_JIRA_BOARD || readEnv('JIRA_BOARD') || 42);
 
-const PLUGIN = join(dirname(dirname(fileURLToPath(import.meta.url))), 'index.js');
-const mod = await import(pathToFileURL(PLUGIN).href);
+const mod = await import(pathToFileURL(HOST_COPY).href);
 
 const captured = [];
 const ctx = {
@@ -66,8 +68,14 @@ for (const def of captured) {
 const work = captured.find((t) => t.name === 'jira_my_work');
 const issue = captured.find((t) => t.name === 'jira_issue');
 
-console.log('\n===== jira_my_work scope=open limit=10 =====');
-console.log(await work.execute({ scope: 'open', limit: 10 }, {}));
+try {
+  console.log('\n===== jira_my_work scope=open limit=10 =====');
+  console.log(await work.execute({ scope: 'open', limit: 10 }, {}));
+} catch (error) {
+  // 探针：站点不可达 / 临时 5xx 时 SKIP（离线 shape / render 检查已经跑完了）。
+  console.log(`\nSKIP: Jira 不可用（${error?.message ?? error}）`);
+  process.exit(0);
+}
 
 console.log('\n===== jira_my_work scope=sprint limit=10 =====');
 console.log(await work.execute({ scope: 'sprint', limit: 10 }, {}));

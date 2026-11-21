@@ -1,3 +1,4 @@
+import { prepareHostCopy, skipWhenUnavailable } from './lib-host-runtime.mjs';
 // host 侧：验证 /jira --json 的 sprint 分组数据（真实 Jira）。
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -21,7 +22,8 @@ const BOARD = Number(process.env.DSH_JIRA_BOARD
 mkdirSync(join(TMP, 'dsh-jira-smoke3'), { recursive: true });
 
 const WS = dirname(dirname(fileURLToPath(import.meta.url)));
-copyFileSync(`${WS}/index.js`, HOST_COPY);
+const prep = prepareHostCopy({ ws: WS, dest: HOST_COPY });
+skipWhenUnavailable(prep);
 
 const env = Object.fromEntries(
   readFileSync(ENV_FILE, 'utf8')

@@ -1,3 +1,4 @@
+import { prepareHostCopy, skipWhenUnavailable } from './lib-host-runtime.mjs';
 // 离线端到端：任务行的「计划」按钮 → host 的 /api/jira-work-overview/plan 通道 → 建一条 plan 模式的会话。
 //
 // 全程不联网：Jira、DSH 的 remote / workspace / agents 服务都用桩，但**跑的是真的 index.js 与 client.js**。
@@ -17,34 +18,8 @@ const HOST_COPY = join(TMP, 'dsh-jira-plan', 'index.js');
 mkdirSync(join(TMP, 'dsh-jira-plan'), { recursive: true });
 
 const WS = dirname(dirname(fileURLToPath(import.meta.url)));
-copyFileSync(`${WS}/index.js`, HOST_COPY);
-
-/* host 半边 import @deepseek-ai/schemastery，那个包只活在 app.asar 里（真目录不能软链），
-   所以照 dsh-jira-smoke3 的老做法整包**拷**到临时目录的 node_modules 下
-   （DSH_INSTALL_DIR/package.json 的 dependencies 里就有它和它的依赖 cosmokit）。 */
-const HOST_MODULES = join(TMP, 'dsh-jira-plan', 'node_modules', '@deepseek-ai');
-for (const name of ['schemastery', 'cosmokit']) {
-  const target = join(HOST_MODULES, name);
-  if (existsSync(target)) continue;
-  // 包目录不能靠 resolve（app.asar 里的 exports 会被 fs 的 asar 补丁挡掉）：
-  // 锚点 `<root>/dsh/node_modules/@deepseek-ai/dsh` 往上一级就是依赖树 `<root>/dsh/node_modules/@deepseek-ai`。
-  const root = join(process.env.DSH_INSTALL_DIR, '..', name);
-  mkdirSync(target, { recursive: true });
-  const fs = await import('node:fs');
-  for (const entry of fs.readdirSync(root)) {
-    const abs = join(root, entry);
-    if (fs.statSync(abs).isDirectory()) copyTree(fs, abs, join(target, entry));
-    else fs.copyFileSync(abs, join(target, entry));
-  }
-}
-function copyTree(fs, from, to) {
-  mkdirSync(to, { recursive: true });
-  for (const entry of fs.readdirSync(from)) {
-    const abs = join(from, entry);
-    if (fs.statSync(abs).isDirectory()) copyTree(fs, abs, join(to, entry));
-    else fs.copyFileSync(abs, join(to, entry));
-  }
-}
+const prep = prepareHostCopy({ ws: WS, dest: HOST_COPY });
+skipWhenUnavailable(prep);
 
 let failed = 0;
 const check = (ok, label, detail) => {

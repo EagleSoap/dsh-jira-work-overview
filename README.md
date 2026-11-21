@@ -164,12 +164,19 @@ A status **you** changed — from the panel dropdown or `jira_transition` — is
 
 | | macOS | Windows | Linux |
 | --- | --- | --- | --- |
-| Notifications | `osascript` | PowerShell Toast (`-EncodedCommand`) | `notify-send` |
+| Notifications | `osascript` | PowerShell Toast (`-EncodedCommand`); the AUMID is tried in order `DSH_NOTIFY_AUMID` → `DeepSeek Harness` → PowerShell's own AUMID | `notify-send` |
 | Open `cordis.patch.yml` | `open` / `open -R` / osascript app chooser | `cmd /c start` / `rundll32 … OpenAs_RunDLL` / `explorer /select,` | `xdg-open` |
-| Editor picker | scans `/Applications`, `~/Applications`, `/System/Applications` for `.app` bundles | `where` + `%LOCALAPPDATA%` / `%ProgramFiles%`; `PATH` split on `;` | looks for the command name on `PATH`; `PATH` split on `:` |
+| Editor picker | scans `/Applications`, `~/Applications`, `/System/Applications` for `.app` bundles | `where` + `%LOCALAPPDATA%` / `%ProgramFiles%`; `PATH` split on `;` | searches `PATH` **plus** the usual install locations (`/usr/local/bin`, `/snap/bin`, flatpak exports, `~/.local/bin`, `~/.nix-profile/bin`, JetBrains Toolbox), requires an executable bit, launches the resolved absolute path |
 | Host paths | POSIX | avoid spaces in the install path — DSH records it as a `link:` dependency | POSIX |
 
 The web half only uses standard React/DOM APIs (`color-mix`, `createPortal` are supported on all three).
+
+The `cordis.patch.yml` path may be POSIX (`/…`), a Windows drive path (`C:\…` / `C:/…`) or a UNC share
+(`\\server\share\…`, the case when a corporate profile is redirected to a network location).
+
+Known edge: on Windows the `cmd /c start` fallback re-interprets `cmd` metacharacters (`&`, `%`) if the path
+contains them — profile paths placed by DSH do not. `explorer.exe /select,` returns 1 even on success, so only a
+failure to spawn is reported as an error.
 
 **What is real and what is not, on Linux:** every platform difference — notifications, opening `cordis.patch.yml`,
 the editor picker and its `PATH` lookup, fonts and scrollbars — is implemented by `process.platform` dispatch and

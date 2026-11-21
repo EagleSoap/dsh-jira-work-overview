@@ -1,3 +1,4 @@
+import { prepareHostCopy, skipWhenUnavailable } from './lib-host-runtime.mjs';
 // host 侧：状态流转通道 + jira_transition 工具的离线验证（只做只读与失败路径，绝不真写状态）。
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -21,7 +22,8 @@ const BOARD = Number(process.env.DSH_JIRA_BOARD
 mkdirSync(join(TMP, 'dsh-jira-smoke3'), { recursive: true });
 
 const WS = dirname(dirname(fileURLToPath(import.meta.url)));
-copyFileSync(`${WS}/index.js`, HOST_COPY);
+const prep = prepareHostCopy({ ws: WS, dest: HOST_COPY });
+skipWhenUnavailable(prep);
 
 const env = Object.fromEntries(
   readFileSync(ENV_FILE, 'utf8')

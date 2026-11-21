@@ -1865,8 +1865,30 @@ async function notifyDesktop(title, message) {
   }
 }
 
-/** PowerShell Toast（ToastText02 = 标题 + 正文）。不注册 AUMID：失败也只是没有通知，不影响角标。 */
+/**
+ * PowerShell Toast（ToastText02 = 标题 + 正文）。
+ *
+ * **AUMID 必须试多个**：`CreateToastNotifier(<id>)` 只认「在系统里注册过的 AppUserModelID」
+ * （开始菜单里那条快捷方式带的值）。随手编一个字符串（早先写的 `"DeepSeek Harness"`）时，
+ * 大多数机器上 Show() 会抛 `Element not found (0x80070490)`，于是 **Windows 上一条通知都没有**，
+ * 而且因为失败被静默吞掉，看起来像「通知开关没生效」。
+ * PowerShell 自己那条 AUMID 是系统内置的，一定注册过——拿它兜底至少能弹出通知（来源显示
+ * 「Windows PowerShell」）。想用自己的名字，就把 AUMID 放进 `DSH_NOTIFY_AUMID`。
+ */
+function windowsToastAumids() {
+  const fromEnv = String(process.env.DSH_NOTIFY_AUMID ?? '').trim();
+  return [
+    fromEnv,
+    // Electron 打包的 app 常用 exe 名 / appId 作 AUMID，两种都试一下。
+    'DeepSeek Harness',
+    'com.deepseek.harness',
+    // 兜底：PowerShell 自带的（系统内置的快捷方式，AUMID 一定存在）。
+    '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe',
+  ].filter((row, index, all) => row && all.indexOf(row) === index);
+}
+
 function windowsToastScript(title, message) {
+  const ids = windowsToastAumids().map((row) => powerShellString(row)).join(', ');
   return [
     '$ErrorActionPreference = "Stop"',
     '[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null',
@@ -1875,8 +1897,13 @@ function windowsToastScript(title, message) {
     '$texts = $template.GetElementsByTagName("text")',
     `$texts.Item(0).AppendChild($template.CreateTextNode(${powerShellString(title)})) > $null`,
     `$texts.Item(1).AppendChild($template.CreateTextNode(${powerShellString(message)})) > $null`,
-    '[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("DeepSeek Harness").Show([Windows.UI.Notifications.ToastNotification]::new($template))',
-  ].join('; ');
+    '$toast = [Windows.UI.Notifications.ToastNotification]::new($template)',
+    `foreach ($id in @(${ids})) {`,
+    '  try { [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($id).Show($toast); exit 0 } catch { }',
+    '}',
+    'exit 1',
+    // 用换行拼接：`;` 拼出来的 `foreach (...) {; try …}` 在 PowerShell 里是语法错误。
+  ].join('\n');
 }
 
 /** PowerShell 单引号字面量：内部单引号翻倍（换行、中文、emoji 都安全）。 */
@@ -2506,11 +2533,17 @@ function execFileAsync(execFile, file, args, options) {
   });
 }
 
-/** 目标必须是绝对路径（`/…` 或 `C:\…`）且以 cordis.patch.yml 结尾。 */
+/**
+ * 目标必须是绝对路径且以 cordis.patch.yml 结尾。三种「绝对」都认：
+ * `/…`（POSIX）、`C:\…` / `C:/…`（Windows 盘符）、`\\\\server\\share\\…`（Windows 网络共享——
+ * 公司里 profile 目录被重定向到共享盘时就是这一种，早先只认盘符会报「patch 路径未知」）。
+ */
 function isPatchTarget(path) {
   const value = String(path ?? '').trim();
   if (!value.endsWith('cordis.patch.yml')) return false;
-  return value.startsWith('/') || /^[A-Za-z]:[\\/]/.test(value);
+  if (value.startsWith('/')) return true;
+  if (/^[A-Za-z]:[\\/]/.test(value)) return true;
+  return /^[\\/]{2}[^\\/]/.test(value);
 }
 
 // --------------------------------------------- 候选编辑器（编辑器直选）
@@ -2567,14 +2600,50 @@ const EDITOR_CANDIDATES = [
   { id: 'gedit', label: 'gedit', mac: '', winCmd: '', winPaths: [], linux: 'gedit' },
 ];
 
-/** 在 PATH 里找命令（Linux 的探测：不必完美，找到即可）。 */
-function findEditorOnPath(cmd, existsSync) {
+/**
+ * Linux / 类 Unix 上额外要看的目录。桌面启动器起的 Electron **不继承登录 shell 的 PATH**
+ * （典型只有 /usr/bin:/bin），而 snap、flatpak、nvm、~/.local/bin 装的编辑器都在别处——
+ * 只按 PATH 找的话，「装了 VS Code 却探测不到」是常态。
+ */
+function extraUnixPathDirs() {
+  const home = process.env.HOME || '';
+  const dirs = ['/usr/local/bin', '/usr/bin', '/bin', '/snap/bin', '/var/lib/flatpak/exports/bin'];
+  if (home) {
+    dirs.push(
+      `${home}/.local/bin`,
+      `${home}/.nix-profile/bin`,
+      `${home}/.linuxbrew/bin`,
+      `${home}/.local/share/flatpak/exports/bin`,
+      `${home}/.local/share/JetBrains/Toolbox/scripts`,
+    );
+  }
+  return dirs;
+}
+
+/**
+ * 在 PATH（外加 extraUnixPathDirs 里的常见安装位）中找命令，返回**绝对路径**；
+ * 找到的必须是可执行文件（`X_OK`），否则一个只是同名的普通文件也会被当成编辑器，
+ * 点下去必然失败。找不到返回空串。
+ */
+function findEditorOnPath(cmd, fs) {
   // PATH 分隔符按平台取：Windows 上 `;`（盘符里的 `:` 不能当分隔符），类 Unix 上是 `:`。
   const dirs = String(process.env.PATH ?? '').split(process.platform === 'win32' ? ';' : ':').filter(Boolean);
-  for (const dir of dirs) {
+  const seen = new Set();
+  for (const dir of [...dirs, ...extraUnixPathDirs()]) {
     const guess = `${dir.replace(/[\\/]+$/, '')}/${cmd}`;
+    if (seen.has(guess)) continue;
+    seen.add(guess);
     try {
-      if (existsSync(guess)) return guess;
+      if (!fs.existsSync(guess)) continue;
+      if (fs.statSync(guess).isDirectory()) continue;
+      if (typeof fs.accessSync === 'function') {
+        try {
+          fs.accessSync(guess, fs.constants?.X_OK ?? 1);
+        } catch {
+          continue; // 有文件但不可执行：不算可用
+        }
+      }
+      return guess;
     } catch {
       /* 单个目录不可读就跳过 */
     }
@@ -2615,9 +2684,9 @@ async function detectEditors(settings) {
       return [];
     }
   }
-  let existsSync;
+  let fs;
   try {
-    ({ existsSync } = await import('node:fs'));
+    fs = await import('node:fs');
   } catch {
     return [];
   }
@@ -2631,7 +2700,7 @@ async function detectEditors(settings) {
       if (!candidate.mac) continue;
       const dir = dirs.find((row) => {
         try {
-          return existsSync(`${row}/${candidate.mac}`);
+          return fs.existsSync(`${row}/${candidate.mac}`);
         } catch {
           return false;
         }
@@ -2654,7 +2723,7 @@ async function detectEditors(settings) {
         for (const pattern of candidate.winPaths ?? []) {
           const expanded = expandWindowsEnv(pattern);
           try {
-            if (existsSync(expanded)) { hit = expanded; break; }
+            if (fs.existsSync(expanded)) { hit = expanded; break; }
           } catch {
             /* 跳过 */
           }
@@ -2665,12 +2734,12 @@ async function detectEditors(settings) {
     return found;
   }
 
-  // Linux / 其它类 Unix：在 PATH 里找命令名。
+  // Linux / 其它类 Unix：在 PATH（+ 常见安装位）里找命令，**用找到的绝对路径去启动**。
+  // 只存命令名的话，桌面启动器给的最小 PATH 里找不到它，按钮画得出来却点不动。
   for (const candidate of EDITOR_CANDIDATES) {
     if (!candidate.linux) continue;
-    if (findEditorOnPath(candidate.linux, existsSync)) {
-      found.push({ id: candidate.id, label: candidate.label, launch: { kind: 'cmd', value: candidate.linux } });
-    }
+    const hit = findEditorOnPath(candidate.linux, fs);
+    if (hit) found.push({ id: candidate.id, label: candidate.label, launch: { kind: 'cmd', value: hit } });
   }
   return found;
 }
@@ -2781,7 +2850,9 @@ async function openPatchFile(settings, mode, patchPath, jira, app) {
     } else if (platform === 'win32') {
       command = 'explorer.exe';
       args = ['/select,' + target];
-      options = { windowsHide: true };
+      // explorer.exe 即便成功也常常返回 1：只把「起不来」（ENOENT 之类）当失败，
+      // 否则「在文件管理器中显示」永远报错，但窗口其实已经开了。
+      options = { windowsHide: true, tolerateExit: true };
     } else {
       // Linux 等没有统一的「定位」动作，退化成打开父目录。
       const cut = target.lastIndexOf('/');
@@ -2801,7 +2872,8 @@ async function openPatchFile(settings, mode, patchPath, jira, app) {
   }
 
   const error = await execFileAsync(execFile, command, args, options);
-  if (error) {
+  const startedAnyway = options?.tolerateExit === true && error && typeof error.code === 'number';
+  if (error && !startedAnyway) {
     return { ok: false, error: t('err.openFailed', { path: target, message: String(error?.message ?? error) }) };
   }
   const opened = { ok: true, mode: picked, patchPath: target };

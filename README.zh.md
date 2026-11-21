@@ -373,17 +373,26 @@ issue 摘要、状态名（`In Review`、`已完成`…）、父需求名、标�
 
 | 事项 | macOS | Windows | Linux |
 |---|---|---|---|
-| 通知 | `osascript`（系统自带） | `powershell.exe` + WinRT Toast（Win10+ 自带） | `notify-send`（装了 libnotify 才有） |
+| 通知 | `osascript`（系统自带） | `powershell.exe` + WinRT Toast（Win10+ 自带），AUMID 依次试 `DSH_NOTIFY_AUMID` 环境变量 → `DeepSeek Harness` → PowerShell 自己的 AUMID | `notify-send`（装了 libnotify 才有） |
 | 通知不可用时 | 静默：面板里仍有角标与横幅 | 同左（组策略禁用 PowerShell、或没有交互式桌面会话时也会静默） | 同左 |
 | 打开配置文件 | `open` / `open -R` / `choose application` 全支持 | `start` / `explorer /select,` / `OpenAs_RunDLL` 全支持 | `xdg-open`，「选择打开方式」不可用 |
-| 编辑器直选 | 扫 `/Applications`、`~/Applications`、`/System/Applications` 找 `.app`，用 `open -a` 启动 | `where` + `%LOCALAPPDATA%` / `%ProgramFiles%` 已知路径；非 `.exe` 路径用 `cmd /c start` 兜底 | 在 `PATH` 里找命令名，`execFile('<命令>', [path])` |
+| 编辑器直选 | 扫 `/Applications`、`~/Applications`、`/System/Applications` 找 `.app`，用 `open -a` 启动 | `where` + `%LOCALAPPDATA%` / `%ProgramFiles%` 已知路径；非 `.exe` 路径用 `cmd /c start` 兜底 | 在 `PATH` **加**常见安装位（`/usr/local/bin`、`/snap/bin`、flatpak exports、`~/.local/bin`、`~/.nix-profile/bin`、JetBrains Toolbox）里找可执行文件，用找到的**绝对路径**启动 |
 | 自由输入应用名 / 路径 | `open -a <你填的> -- <path>` | 存在的 `.exe` 直接执行，否则 `cmd /c start "" <你填的> <path>` | `execFile(<你填的>, [path])` |
 | 界面字体 | 走宿主变量，回退 `-apple-system` / `PingFang SC` | 回退 `Segoe UI` / `Microsoft YaHei`；等宽 `Consolas` / `Cascadia Mono` | 回退 `system-ui` |
 | 项目 tab 横向滚动 | 隐藏滚动条 + 两侧 `‹ ›` 按钮 | 细滚动条（Windows 没有 overlay scrollbar，**不能藏**）+ 两侧 `‹ ›` 按钮 | 同 Windows |
 | `PATH` 分隔符（编辑器探测） | `:` | `;`（盘符里的 `:` 不能当分隔符） | `:` |
 
 编辑器候选表里给了 Linux 命令名的：VS Code（`code`）、Cursor（`cursor`）、Windsurf（`windsurf`）、
-Zed（`zed`）、Sublime Text（`subl`）、gedit（`gedit`）——**在 `PATH` 里找到才画按钮**，找不到就不画，不猜。
+Zed（`zed`）、Sublime Text（`subl`）、gedit（`gedit`）——**找到可执行文件才画按钮**，找不到就不画，不猜。
+桌面启动器起的 Electron 不继承登录 shell 的 `PATH`（典型只有 `/usr/bin:/bin`），所以探测会把上面那串常见安装位
+也加进来；按钮里存的是探测到的绝对路径，点下去不依赖进程的 `PATH`。
+
+**配置文件路径**接受三种「绝对」：`/…`、`C:\…` / `C:/…` 盘符、`\\server\share\…` 网络共享
+（公司里 profile 目录被重定向到共享盘时就是这一种）。
+
+**已知边界**：Windows 上用 `cmd /c start` 打开时，若路径里含 `&`、`%` 这类 `cmd` 元字符，
+参数可能被 `cmd` 重新解释；路径来自 DSH 自己的 profile 位置，正常安装不会碰到。`explorer.exe /select,`
+即便成功也常返回 1，插件只把「起不来」当失败，不会误报打不开。
 
 **Linux 上的实现状态要说清楚**：平台的差异全部按 `process.platform` 分派实现，并有离线套件覆盖，
 **但从来没有在 Linux 机器上真跑过**（开发一直在 macOS）。所以「Windows / Linux 支持」是**实现了、未经实机验证**，

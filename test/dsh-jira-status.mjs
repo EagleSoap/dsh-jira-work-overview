@@ -1,3 +1,4 @@
+import { prepareHostCopy, skipWhenUnavailable } from './lib-host-runtime.mjs';
 // 离线端到端：真 host 命令 + 真 client 组件（按 sprint 分组 + 折叠/展开）。
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -21,7 +22,8 @@ const BOARD = Number(process.env.DSH_JIRA_BOARD
 mkdirSync(join(TMP, 'dsh-jira-smoke3'), { recursive: true });
 
 const WS = dirname(dirname(fileURLToPath(import.meta.url)));
-copyFileSync(`${WS}/index.js`, HOST_COPY);
+const prep = prepareHostCopy({ ws: WS, dest: HOST_COPY });
+skipWhenUnavailable(prep);
 
 const env = Object.fromEntries(
   readFileSync(ENV_FILE, 'utf8')

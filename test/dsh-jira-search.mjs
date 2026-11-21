@@ -1,3 +1,4 @@
+import { prepareHostCopy, skipWhenUnavailable } from './lib-host-runtime.mjs';
 /**
  * Jira 搜索（面板搜索框 / `/jira --search=`）的离线端到端测试。
  *
@@ -19,6 +20,8 @@ const DIR = join(TMP, 'dsh-jira-smoke3');
 const WS = fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, '');
 mkdirSync(DIR, { recursive: true });
 const HOST_COPY = join(DIR, 'index.js');
+const prep = prepareHostCopy({ ws: WS, dest: HOST_COPY });
+skipWhenUnavailable(prep);
 copyFileSync(join(WS, 'index.js'), HOST_COPY);
 
 const results = [];

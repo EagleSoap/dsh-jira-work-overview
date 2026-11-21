@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { prepareHostCopy, skipWhenUnavailable } from './lib-host-runtime.mjs';
 /**
  * 离线：**自己**改的状态不该被下一轮后台轮询当成「变化」再通知一次。
  *
@@ -21,6 +22,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
    所以和 visual / credential 一样：把 index.js 拷到那份依赖旁边再 import。 */
 const TMP = process.env.DSH_JIRA_TMP || (existsSync(join('/tmp', '.dsh_jira_env')) ? '/tmp' : tmpdir());
 const HOST_COPY = join(TMP, 'dsh-jira-smoke3', 'index.js');
+const prep = prepareHostCopy({ ws: dirname(dirname(fileURLToPath(import.meta.url))), dest: HOST_COPY });
+skipWhenUnavailable(prep);
 mkdirSync(dirname(HOST_COPY), { recursive: true });
 copyFileSync(join(dirname(dirname(fileURLToPath(import.meta.url))), 'index.js'), HOST_COPY);
 const mod = await import(pathToFileURL(HOST_COPY).href);

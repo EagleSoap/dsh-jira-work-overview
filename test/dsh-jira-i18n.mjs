@@ -1,3 +1,4 @@
+import { prepareHostCopy, skipWhenUnavailable } from './lib-host-runtime.mjs';
 /**
  * 国际化（zh / en）端到端测试。
  *
@@ -16,8 +17,11 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const TMP = process.env.DSH_JIRA_TMP || (existsSync(join('/tmp', '.dsh_jira_env')) ? '/tmp' : tmpdir());
 const HOST_COPY = join(TMP, 'dsh-jira-smoke3', 'index.js');
+
 // 项目目录名里带空格（`dsh plugins`），必须走 fileURLToPath：URL.pathname 会把空格转成 %20，复制文件就 ENOENT。
 const WS = fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, '');
+const prep = prepareHostCopy({ ws: WS, dest: HOST_COPY });
+skipWhenUnavailable(prep);
 mkdirSync(join(TMP, 'dsh-jira-smoke3'), { recursive: true });
 copyFileSync(join(WS, 'index.js'), HOST_COPY);
 // patch 文件真的建出来：settings GET 才会回 patchExists=true，面板上的按钮才不是禁用的。

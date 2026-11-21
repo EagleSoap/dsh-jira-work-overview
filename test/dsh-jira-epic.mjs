@@ -1,3 +1,4 @@
+import { prepareHostCopy, skipWhenUnavailable } from './lib-host-runtime.mjs';
 // 离线：epic 从属关系的两个纯逻辑件（字段 id 解析 + 分组）。
 //
 // 真实站点踩到的坑（2026-11-20）：同一个站点既有 gh-epic-label（10011，恒空）又有
@@ -12,7 +13,8 @@ const TMP = process.env.DSH_JIRA_TMP || (existsSync(join('/tmp', '.dsh_jira_env'
 const HOST_COPY = join(TMP, 'dsh-jira-smoke3', 'index.js');
 mkdirSync(join(TMP, 'dsh-jira-smoke3'), { recursive: true });
 const WS = dirname(dirname(fileURLToPath(import.meta.url)));
-copyFileSync(`${WS}/index.js`, HOST_COPY);
+const prep = prepareHostCopy({ ws: WS, dest: HOST_COPY });
+skipWhenUnavailable(prep);
 
 // 只抠两个纯函数：index.js 是 ESM 且依赖宿主模块，直接 import 在仓库外拿不到 @deepseek-ai/*。
 const src = readFileSync(HOST_COPY, 'utf8');

@@ -81,7 +81,37 @@ function findChrome() {
   return candidates[0];
 }
 const CHROME = findChrome();
-const ASAR = process.env.DSH_JIRA_ASAR || '/Applications/DeepSeek Harness.app/Contents/Resources/app.asar';
+/* Linux 上以 root 跑（CI / 容器）时 Chrome 拒绝启动，必须关掉沙箱；普通用户不要关。 */
+const ROOT_CHROME_ARGS = (() => {
+  try {
+    return typeof process.getuid === 'function' && process.getuid() === 0 ? ['--no-sandbox'] : [];
+  } catch {
+    return [];
+  }
+})();
+/* DSH 的安装目录：主题 token 从它的 app.asar 里取。DSH_JIRA_ASAR 优先；
+   否则按平台列常见安装位，取第一个存在的（取不到只影响观感，脚本会 WARN 后继续）。 */
+function findAsar() {
+  const explicit = String(process.env.DSH_JIRA_ASAR || '').trim();
+  if (explicit) return explicit;
+  let home = '';
+  try { home = homedir(); } catch { home = ''; }
+  const candidates = process.platform === 'darwin'
+    ? ['/Applications/DeepSeek Harness.app/Contents/Resources/app.asar', join(home, 'Applications/DeepSeek Harness.app/Contents/Resources/app.asar')]
+    : process.platform === 'win32'
+      ? [
+        join(process.env.LOCALAPPDATA || join(home, 'AppData', 'Local'), 'Programs', 'DeepSeek Harness', 'resources', 'app.asar'),
+        join(process.env.ProgramFiles || 'C:\\Program Files', 'DeepSeek Harness', 'resources', 'app.asar'),
+      ]
+      : [
+        '/opt/DeepSeek Harness/resources/app.asar',
+        '/usr/lib/deepseek-harness/resources/app.asar',
+        '/usr/share/deepseek-harness/resources/app.asar',
+        '/opt/deepseek-harness/resources/app.asar',
+      ];
+  return candidates.find((file) => file && existsSync(file)) || candidates[0];
+}
+const ASAR = findAsar();
 const THEME_CSS = [
   `${ASAR}/dsh/node_modules/@deepseek-ai/dsh-client-ui-theme/src/styles/base.css`,
   `${ASAR}/dsh/node_modules/@deepseek-ai/dsh-client-ui-theme/src/styles/design-platform.css`,
@@ -687,9 +717,10 @@ function shot(name, html, width, height) {
   const png = join(OUT_DIR, `${name}${THEME === 'dark' ? '-dark' : ''}.png`);
   const args = [
     '--headless=new', '--disable-gpu', '--hide-scrollbars', '--no-first-run', '--no-default-browser-check',
+    ...ROOT_CHROME_ARGS,
     '--force-color-profile=srgb', '--force-device-scale-factor=2', '--virtual-time-budget=1200',
     `--user-data-dir=${join(SHOT_DIR, 'chrome-profile')}`,
-    `--window-size=${width},${height}`, `--screenshot=${png}`, `file://${base}.html`,
+    `--window-size=${width},${height}`, `--screenshot=${png}`, pathToFileURL(`${base}.html`).href,
   ];
   execFileSync(CHROME, args, { stdio: ['ignore', 'ignore', 'pipe'] });
   const size = readFileSync(png).length;
@@ -744,8 +775,9 @@ function measureRows(name, panel, width, height) {
   const tokens = currentTokens;
   const dom = execFileSync(CHROME, [
     '--headless=new', '--disable-gpu', '--hide-scrollbars', '--no-first-run', '--no-default-browser-check',
+    ...ROOT_CHROME_ARGS,
     '--force-color-profile=srgb', `--window-size=${width},${height}`, '--virtual-time-budget=800', '--dump-dom',
-    `--user-data-dir=${join(SHOT_DIR, 'chrome-profile')}`, `file://${file}`,
+    `--user-data-dir=${join(SHOT_DIR, 'chrome-profile')}`, pathToFileURL(file).href,
   ], { stdio: ['ignore', 'pipe', 'ignore'] }).toString();
   const match = /data-measured="([^"]*)"/.exec(dom);
   if (!match) throw new Error(`${name}: 没量到行高（data-measured 缺失）`);
