@@ -91,20 +91,26 @@ const show = async (label, response) => {
   return payload;
 };
 
-// 1) GET 列可用流转（只读）
-const good = `${BASE}/api/jira-work-overview/transition?key=${PROJECT}-4051`;
-await show('GET ?key=' + PROJECT + '-4051', await route.fetch(new Request(good, { method: 'GET' })));
-
-// 2) 坏 key → 400（host 侧校验）
+// 1) 坏 key → 400（host 侧校验，不碰网络）
 const url = `${BASE}/api/jira-work-overview/transition?key=oops`;
 await show('GET ?key=oops', await route.fetch(new Request(url, { method: 'GET' })));
 
-// 3) POST 缺 transitionId → 400
+// 2) POST 缺 transitionId → 400（同样不碰网络）
 await show('POST 缺 transitionId', await call({
   method: 'POST',
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify({ key: `${PROJECT}-4051` }),
 }));
+
+// 下面全部要真站点：没有 baseUrl / token 就 SKIP（干净机器、CI、别人的 Linux 上是跳过而不是失败）
+if (!env.JIRA_BASE_URL || !env.JIRA_API_TOKEN) {
+  console.log('\nSKIP: 没有 JIRA_BASE_URL / JIRA_API_TOKEN（环境文件或环境变量都没给），真站点流转测试跳过');
+  process.exit(0);
+}
+
+// 3) GET 列可用流转（只读）
+const good = `${BASE}/api/jira-work-overview/transition?key=${PROJECT}-4051`;
+await show('GET ?key=' + PROJECT + '-4051', await route.fetch(new Request(good, { method: 'GET' })));
 
 // 4) POST 不存在的 transitionId → Jira 400（不改变任何状态）
 await show('POST transitionId=999999', await call({

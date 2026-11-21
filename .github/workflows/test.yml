@@ -1,0 +1,73 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline:
+    name: offline suites (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # 套件只缺宿主的两个依赖：@deepseek-ai/schemastery + cosmokit（正常来自 DSH 的 app.asar）。
+      # CI 上没有 DSH 安装包，那就从 npm 装这两个包，拼出一个假的依赖树喂给 DSH_INSTALL_DIR：
+      # `test/lib-host-runtime.mjs` 认这个锚点（`<root>/node_modules/@deepseek-ai/dsh`），
+      # 于是整套离线测试在没装 DSH 的机器上也能真跑，而不是全部 SKIP。
+      - name: Stage host dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGE="$RUNNER_TEMP/host"
+          mkdir -p "$STAGE"
+          cd "$STAGE"
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund --registry=https://registry.npmjs.org \
+            @deepseek-ai/schemastery@3.19.0 cosmokit@1.8.1
+          mkdir -p node_modules/@deepseek-ai/dsh
+          cp -R node_modules/cosmokit node_modules/@deepseek-ai/cosmokit
+          {
+            echo "DSH_INSTALL_DIR=$STAGE/node_modules/@deepseek-ai/dsh"
+            echo "DSH_JIRA_TMP=$RUNNER_TEMP/jira"
+          } >> "$GITHUB_ENV"
+
+      - name: Syntax check
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check index.js
+          node --check client.js
+
+      - name: Offline suites
+        shell: bash
+        run: |
+          set -uo pipefail
+          failed=""
+          for suite in bundle-id platform visual credential plan i18n search epic selfwatch json smoke smoke3 due sprint status transition; do
+            echo "::group::$suite"
+            if node "test/dsh-jira-$suite.mjs"; then
+              echo "PASS $suite"
+            else
+              echo "::error::suite failed: $suite"
+              failed="$failed $suite"
+            fi
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::failed suites:$failed"
+            exit 1
+          fi
+          echo "所有离线套件通过"

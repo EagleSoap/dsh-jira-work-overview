@@ -7,6 +7,29 @@ BIN="/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness"
 ELECTRON_RUN_AS_NODE=1 "$BIN" test/<script>.mjs
 ```
 
+## CI — and running the suites on a machine without DSH
+
+`.github/workflows/test.yml` runs on every push / PR (and on demand) on `ubuntu-latest`, `macos-latest`
+and `windows-latest`. GitHub Actions is free for public repositories, so this repo's CI costs nothing.
+
+The suites only need two host packages (`@deepseek-ai/schemastery` + `cosmokit`); DSH itself is not
+required. When there is no DSH install, the workflow installs those two packages from npm and hands the
+helper a **fabricated** `DSH_INSTALL_DIR` pointing at `<stage>/node_modules/@deepseek-ai/dsh`, which is the
+anchor `prepareHostCopy()` expects. Reproduce it locally without DSH:
+
+```bash
+STAGE=/tmp/host-deps && mkdir -p "$STAGE" && cd "$STAGE" && npm init -y >/dev/null
+npm i --no-audit --no-fund @deepseek-ai/schemastery@3.19.0 cosmokit@1.8.1
+mkdir -p node_modules/@deepseek-ai/dsh && cp -R node_modules/cosmokit node_modules/@deepseek-ai/cosmokit
+DSH_INSTALL_DIR="$STAGE/node_modules/@deepseek-ai/dsh" node test/dsh-jira-platform.mjs
+```
+
+What CI can and cannot tell you: it really spawns processes on each OS, so path separators, `where`,
+argument quoting, exit codes and the SKIP-not-fail rule are exercised for real (the `platform` suite itself
+is skipped on the Windows runner because its fake executables are `sh` scripts). It cannot verify a
+desktop session: no Toast is shown, no `explorer /select` selection is visible, and the real-site suites
+skip without `JIRA_*` credentials (no secrets are configured on purpose — this is a public repo).
+
 ## Current suites
 
 | Script | Needs Jira | Covers |
@@ -17,6 +40,7 @@ ELECTRON_RUN_AS_NODE=1 "$BIN" test/<script>.mjs
 | `dsh-jira-plan.mjs` | no | the per-row **「计划」 button** end to end: a planning session is created in the project's linked workspace, `/plan` runs before the first message, that message carries the `JIRA_PLAN_SESSION:<KEY>` token plus the "only report the changes to make" / "stop if the issue is unclear" rules, a second click reuses the same session (local binding, then a token search through the session log), gaps are listed for a thin issue, and a missing workspace / plan-mode policy fails loudly |
 | `dsh-jira-credential.mjs` | no | configure dialog + all six fetch routes: token/email save, verification and rejection, masked value, two-step clear, watch/language/fetch-size writes, paging (`--limit=0`, safety cap) |
 | `dsh-jira-i18n.mjs` | no | language matrix (`DSH_JIRA_LANG`, `--lang`, `?lang`, config, host preference), Jira data kept verbatim, dictionary parity (zh/en key sets), host paging assertions, the "open `cordis.patch.yml`" route |
+| `dsh-jira-platform.mjs` | no | **platform dispatch, verified without a VM**: forces `process.platform` and puts fake `cmd.exe` / `explorer.exe` / `rundll32.exe` / `powershell.exe` / `where` / `xdg-open` / `notify-send` shims on `PATH` that only log their `argv`, so every platform branch really spawns something and the test asserts the exact command + arguments (open / reveal / choose / custom app / editor picker / Unix `PATH` split / `X_OK` check / UNC patch path / `explorer.exe` exit code 1 / toast script and its AUMID fallback list) |
 | `dsh-jira-transition.mjs` | yes | `jira_transition`: listing transitions, preview vs. `apply`, invalid key / invalid transition id failure paths (never writes on the happy path) |
 | `dsh-jira-status.mjs` | yes | end-to-end panel run against a real site (real 300+ item result, filter, abort on switch, virtualization); **skips itself with `SKIP:`** when Jira is unreachable, so a flaky network never looks like a regression |
 

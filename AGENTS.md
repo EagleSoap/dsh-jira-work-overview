@@ -32,6 +32,7 @@ ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-visual.mjs      # offline (rendering
 ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-credential.mjs  # offline (config dialog + all 6 routes)
 ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-plan.mjs        # offline (「计划」 button → planning session)
 ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-i18n.mjs        # offline (language matrix + paging)
+ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-platform.mjs    # offline (forces win32/linux; fake shims on PATH log the exact argv)
 ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-status.mjs      # needs a real site; SKIPs when unreachable
 ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-transition.mjs  # needs a real site (never writes)
 ```
