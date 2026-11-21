@@ -2,6 +2,8 @@
 
 在 DSH 里查看**指派给我的 Jira 工作项**以及它们的实时工作流状态，用于快速回答「我这个迭代还要做什么」「哪些已经开发完在等测试」。
 
+[![离线测试](https://github.com/EagleSoap/dsh-jira-work-overview/actions/workflows/test.yml/badge.svg)](https://github.com/EagleSoap/dsh-jira-work-overview/actions/workflows/test.yml) 每次 push / PR 会在 Ubuntu、macOS、Windows 三个系统上跑整套离线测试（GitHub Actions 对公开仓库免费）。
+
 <p align="center">
   <img src="docs/images/panel.zh.png" width="1040" alt="DSH 里的 Jira 面板：按迭代分组的行、状态徽标、High/Highest 底色、项目 tab 与单选状态筛选">
 </p>
