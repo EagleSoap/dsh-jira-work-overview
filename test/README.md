@@ -7,6 +7,13 @@ BIN="/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness"
 ELECTRON_RUN_AS_NODE=1 "$BIN" test/<script>.mjs
 ```
 
+## Run them all
+
+```bash
+node test/run-offline.mjs          # 全部离线套件（CI 用的就是这个）
+node test/run-offline.mjs --release  # 同上 + 发版预检进入 release 模式
+```
+
 ## CI — and running the suites on a machine without DSH
 
 `.github/workflows/test.yml` runs on every push / PR (and on demand) on `ubuntu-latest`, `macos-latest`
@@ -23,6 +30,11 @@ npm i --no-audit --no-fund @deepseek-ai/schemastery@3.19.0 cosmokit@1.8.1
 mkdir -p node_modules/@deepseek-ai/dsh && cp -R node_modules/cosmokit node_modules/@deepseek-ai/cosmokit
 DSH_INSTALL_DIR="$STAGE/node_modules/@deepseek-ai/dsh" node test/dsh-jira-platform.mjs
 ```
+
+Two workflows:
+
+- `test.yml` — the matrix above, runs `node test/run-offline.mjs`.
+- `release-check.yml` — read-only preflight on PR / push / tags (`--release` on tags) plus a dry-run `npm pack` listing. `publish.yml` runs the same preflight (`node test/dsh-jira-release.mjs --release`) immediately before `npm publish`, so a version that disagrees with `CHANGELOG.md`, an un-folded `[Unreleased]`, a mismatched bundle id or a leaked personal value blocks the release instead of shipping.
 
 What CI can and cannot tell you: it really spawns processes on each OS, so path separators, `where`,
 argument quoting, exit codes and the SKIP-not-fail rule are exercised for real (the `platform` suite itself
@@ -41,6 +53,7 @@ skip without `JIRA_*` credentials (no secrets are configured on purpose — this
 | `dsh-jira-credential.mjs` | no | configure dialog + all six fetch routes: token/email save, verification and rejection, masked value, two-step clear, watch/language/fetch-size writes, paging (`--limit=0`, safety cap) |
 | `dsh-jira-i18n.mjs` | no | language matrix (`DSH_JIRA_LANG`, `--lang`, `?lang`, config, host preference), Jira data kept verbatim, dictionary parity (zh/en key sets), host paging assertions, the "open `cordis.patch.yml`" route |
 | `dsh-jira-platform.mjs` | no | **platform dispatch, verified without a VM**: forces `process.platform` and puts fake `cmd.exe` / `explorer.exe` / `rundll32.exe` / `powershell.exe` / `where` / `xdg-open` / `notify-send` shims on `PATH` that only log their `argv`, so every platform branch really spawns something and the test asserts the exact command + arguments (open / reveal / choose / custom app / editor picker / Unix `PATH` split / `X_OK` check / UNC patch path / `explorer.exe` exit code 1 / toast script and its AUMID fallback list) |
+| `dsh-jira-release.mjs` | no | **release preflight** (no host deps, pure `fs` + `npm` + `git`): `package.json` is zero-dependency / `exports` + `files` targets exist / `publishConfig` points at the official registry, bundle identity agrees in all three places, `CHANGELOG.md` has a dated entry for the current version (and in `--release` mode it is the newest entry, `[Unreleased]` is empty and the tag matches), the repo is free of personal data (patterns are assembled from fragments so this file does not match itself), and `npm pack --dry-run` really contains every `files` entry with no `.git` / `node_modules` / token fragments |
 | `dsh-jira-transition.mjs` | yes | `jira_transition`: listing transitions, preview vs. `apply`, invalid key / invalid transition id failure paths (never writes on the happy path) |
 | `dsh-jira-status.mjs` | yes | end-to-end panel run against a real site (real 300+ item result, filter, abort on switch, virtualization); **skips itself with `SKIP:`** when Jira is unreachable, so a flaky network never looks like a regression |
 

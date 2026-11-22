@@ -2,7 +2,7 @@
 
 Show **your** Jira work items — with their real workflow status — inside [DeepSeek Harness](https://github.com/deepseek-ai) (DSH): as agent tools, as a `/jira` slash command, and as a panel in the left sidebar with a live unread badge.
 
-[![test](https://github.com/EagleSoap/dsh-jira-work-overview/actions/workflows/test.yml/badge.svg)](https://github.com/EagleSoap/dsh-jira-work-overview/actions/workflows/test.yml)
+[![test](https://github.com/EagleSoap/dsh-jira-work-overview/actions/workflows/test.yml/badge.svg)](https://github.com/EagleSoap/dsh-jira-work-overview/actions/workflows/test.yml) [![release-check](https://github.com/EagleSoap/dsh-jira-work-overview/actions/workflows/release-check.yml/badge.svg)](https://github.com/EagleSoap/dsh-jira-work-overview/actions/workflows/release-check.yml)
 
 > 中文说明见 [README.zh.md](README.zh.md) · Changelog: [CHANGELOG.md](CHANGELOG.md) · License: [MIT](LICENSE)
 

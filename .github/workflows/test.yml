@@ -53,21 +53,4 @@ jobs:
 
       - name: Offline suites
         shell: bash
-        run: |
-          set -uo pipefail
-          failed=""
-          for suite in bundle-id platform visual credential plan i18n search epic selfwatch json smoke smoke3 due sprint status transition; do
-            echo "::group::$suite"
-            if node "test/dsh-jira-$suite.mjs"; then
-              echo "PASS $suite"
-            else
-              echo "::error::suite failed: $suite"
-              failed="$failed $suite"
-            fi
-            echo "::endgroup::"
-          done
-          if [ -n "$failed" ]; then
-            echo "::error::failed suites:$failed"
-            exit 1
-          fi
-          echo "所有离线套件通过"
+        run: node test/run-offline.mjs

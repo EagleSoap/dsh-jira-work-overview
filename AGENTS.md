@@ -35,6 +35,8 @@ ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-i18n.mjs        # offline (language 
 ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-platform.mjs    # offline (forces win32/linux; fake shims on PATH log the exact argv)
 ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-status.mjs      # needs a real site; SKIPs when unreachable
 ELECTRON_RUN_AS_NODE=1 "$BIN" test/dsh-jira-transition.mjs  # needs a real site (never writes)
+node test/dsh-jira-release.mjs                             # offline (release preflight: version/CHANGELOG/identity/secrets/pack)
+node test/run-offline.mjs                                  # every offline suite in one go (what CI runs)
 ```
 
 Then reload the plugin in DSH and refresh the page:
@@ -104,6 +106,10 @@ When that go-ahead comes:
    `git -c credential.helper= clone --depth 1 --branch vX.Y.Z <url> tag` and `cmp` every file listed in
    `files` against the extracted npm tarball — `codeload…/tar.gz/refs/tags/vX.Y.Z` may still serve a
    **cached** archive for a while, so do not trust it right after moving a tag.
+0b. **Preflight**: `node test/dsh-jira-release.mjs --release` must be green before tagging — it checks the
+   version ⇄ `CHANGELOG.md` ⇄ tag agreement, that `[Unreleased]` was folded, the identity triple, the
+   secret scan and the real `npm pack` file list. `publish.yml` runs the same check before `npm publish`,
+   so a stale changelog or a leaked value blocks the release instead of shipping it.
 1. Bump `package.json.version`, add the `CHANGELOG.md` entry, `git add -A && git commit` (if the release
    bundles work already on `main`, fold the `[Unreleased]` notes into the new version section so the
    release notes match the tag's content).

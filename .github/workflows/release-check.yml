@@ -1,0 +1,43 @@
+## 发版预检：只读不写，不发布任何东西。PR / push / tag 都会跑，tag 上跑的是 --release 模式。
+## 它保证「要发出去的那份内容」是自洽的：版本号 = CHANGELOG 条目 = tag、[Unreleased] 已清空、
+## bundle 身份三处一致、仓库没有个人数据、npm pack 的真实文件清单与 package.json 的 files 对得上。
+name: release-check
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    name: release preflight
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Content checks (version / CHANGELOG / identity / secrets / pack list)
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            node test/dsh-jira-release.mjs --release
+          else
+            node test/dsh-jira-release.mjs
+          fi
+
+      - name: Dry-run pack (what npm would upload)
+        run: |
+          npm pack --dry-run
+          echo "--- files in the tarball ---"
+          npm pack --dry-run --json | node -e '
+            const manifest = JSON.parse(require("node:fs").readFileSync(0, "utf8"))[0];
+            for (const file of manifest.files) console.log(String(file.size).padStart(8), file.path);
+            console.log(`total: ${manifest.files.length} files, ${manifest.size} bytes`);
+          '

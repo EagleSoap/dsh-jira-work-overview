@@ -60,6 +60,12 @@ jobs:
             exit 1
           fi
 
+      - name: Preflight — release content must be self-consistent
+        # 只读检查：version / CHANGELOG 定稿 / [Unreleased] 已清空 / bundle 身份 / 脱敏 / pack 清单。
+        # 任何一项不对就在这里失败，绝不进入 npm publish。纯 Node + npm + git，不需要装任何依赖。
+        # （离线测试套件由 test.yml 在同一个提交 push 到 main 时跑过；tag 打在绿过的提交上。）
+        run: node test/dsh-jira-release.mjs --release
+
       - name: Pack (the tarball we must see on the registry)
         run: |
           npm pack --pack-destination "$RUNNER_TEMP"
