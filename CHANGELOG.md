@@ -6,6 +6,60 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Fixed
+
+- **Windows：桌面通知一条都不弹。** Windows 的 Toast 必须挂在一个**已注册的** AUMID 上才能
+  `Show()`；未注册时 `CreateToastNotifier()` 抛 `Element not found (0x80070490)`，而它被静默吞掉了，
+  于是「新任务 / 状态变化」在 Windows 上等于没有通知。现在按 `DSH_NOTIFY_AUMID` → `DeepSeek Harness`
+  → `com.deepseek.harness` → 系统自带的 Windows PowerShell AUMID 顺序逐个试，第一个成功的就停；
+  脚本里的语句改用换行拼接（`{; try … }` 是 PowerShell 语法错误，之前整段都不执行）。
+- **Windows：「在文件管理器中显示」明明成功了却报「打开失败」。** `explorer.exe /select,<path>` 成功时
+  也返回退出码 1，之前被当成失败抛出。现在这个分支允许非零退出码（只有进程根本起不来才算失败）。
+- **Windows：profile 放在网络共享盘上时，配置文件被当成「路径未知」。** 绝对路径判定除了 `/…`、
+  `C:\…`，现在也认 UNC（`\\server\share\…`），「打开 / 显示 / 选择打开方式」不再提前报错。
+- **Linux：编辑器只能存命令名，从桌面启动器点开会失败。** 探测编辑器时除了 `PATH` 还会查
+  `/usr/local/bin`、`/usr/bin`、`/bin`、`/snap/bin`、`/var/lib/flatpak/exports/bin`、`~/.local/bin`、
+  `~/.nix-profile/bin`、`~/.linuxbrew/bin` 和 JetBrains Toolbox 的 scripts 目录；只有**可执行**的才算数
+  （目录跳过），并且启动时用**绝对路径**——最小 `PATH` 的桌面会话里也能点动。
+- **`PATH` 的分隔符按平台取**（Windows 是 `;`，其余是 `:`）。真实 Windows 上探测编辑器走 `where`，
+  这条分支实际不可达，属防御性修复。
+- **Linux 的「选择打开方式」** 明确返回 `err.chooseUnsupported`（系统没有等价物），不再静默失败。
+- **干净机器上跑测试会直接崩**：9 个离线套件在 `$DSH_JIRA_TMP/.dsh_jira_env` 不存在时 `ENOENT`
+  退出 1。现在缺文件就建一个空的（`0o600`），目录不存在就先 `mkdirSync(…, { recursive: true })`。
+- **`test/dsh-jira-transition.mjs` 在没有站点凭据时**抛 `JiraError: No Jira site URL yet: …` 并退出 1
+  （违反「测试必须 SKIP」）。现在先跑两个不碰网络的 400 断言，之后打印
+  `SKIP: 没有 JIRA_BASE_URL / JIRA_API_TOKEN` 并 `exit 0`。
+- **出图脚本不再写死 macOS 的 Chrome / `app.asar` 路径**：`DSH_JIRA_CHROME` / `DSH_JIRA_ASAR` 优先，
+  然后按平台找（Windows 的 `%ProgramFiles%` / `%LOCALAPPDATA%`，Linux 的 `/usr/bin/google-chrome`、
+  `google-chrome-stable`、`chromium`、`chromium-browser`、snap、flatpak）；`file://` 拼接改成
+  `pathToFileURL()`（Windows 上 `file://C:\…` 是非法 URL）；root 用户自动加 `--no-sandbox`（容器 / CI）。
+
+### Testing & CI
+
+- **新增 `test/dsh-jira-platform.mjs`（31 项）**：强制 `process.platform` 走 win32 / linux / freebsd 分支，
+  把 `#!/bin/sh` 假可执行文件（`cmd.exe`、`explorer.exe`、`rundll32.exe`、`powershell.exe`、`where`、
+  `xdg-open`、`notify-send`）放到 `PATH` 最前，断言**真 spawn 出来的命令与参数**。Windows / Linux 的
+  命令行分派第一次有了自动化覆盖：`cmd /c start` 的引号、`explorer /select,`、`rundll32` 打开方式、
+  Toast 脚本内容（AUMID 顺序、单引号转义、UTF-16LE base64 往返）、UNC 路径、`:` 与 `;` 的切分。
+- **新增 `test/lib-host-runtime.mjs` 的 `prepareHostCopy()`**：宿主依赖统一从 `DSH_INSTALL_DIR` 拷，
+  拿不到就 `SKIP: …` + `exit 0`——14 个套件共用，`plan` 套件里 1200 多字的重复拷贝块删掉。
+- **新增 `test/run-offline.mjs`**：一条命令跑完 17 个套件（`--release` 会透传给发版预检）。
+- **新增 `.github/workflows/test.yml`**：Ubuntu / macOS / Windows 三平台矩阵，每次 push / PR 跑整套离线
+  测试（public 仓库的 GitHub Actions 免费）。**机器上没装 DSH 也能跑**：从 npm 装
+  `@deepseek-ai/schemastery` + `cosmokit`，拼一个假 `DSH_INSTALL_DIR` 交给 `prepareHostCopy()`。
+- **新增发版预检 `test/dsh-jira-release.mjs` + `.github/workflows/release-check.yml`**（常规 48 项 /
+  `--release` 50 项）：版本号 ⇄ `CHANGELOG.md` ⇄ tag 一致、`[Unreleased]` 已清空、bundle 身份三处一致、
+  仓库里没有个人数据、`npm pack` 的真实 tarball 清单与 `files` 一致；`publish.yml` 在 `npm publish`
+  之前跑同一预检——内容不自洽就红在发布之前，而不是发出去之后才发现。
+
+### Docs
+
+- 两版 README 新增「版本与升级」（29 个版本的逐版历史表 + 升级方式）与「修复记录」（用户可感知的缺陷
+  与排查顺序），并补「平台支持（macOS / Windows / Linux）」的如实口径：Linux 已实现但未在实机验证、
+  「选择打开方式」是唯一缺口、文件管理器显示退化为打开父目录。
+- 两版 README 加 CI 徽章；`test/README.md` 记录运行方式、`prepareHostCopy`、Chrome / `app.asar` 探测。
+
+
 ## [0.16.0] - 2026-11-20
 
 ### Added
