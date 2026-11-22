@@ -106,7 +106,40 @@ Prefer files? Add an override row to your profile's `cordis.patch.yml` (this is 
   unplanned again and the next click starts a fresh session. Archiving keeps the log — a mis-click is
   recoverable from the archive.
 
+### Planning: link a workspace, then plan
+
+The `☰ Plan` chip needs the project to be linked to a workspace first — that is the step first-time users
+miss. Four steps, and from then on every card is one click away from a planning conversation:
+
+<img src="docs/images/plan-flow.png" width="1040" alt="Four steps: (1) right-click the workspace row and pick 'Link Jira project…', (2) the panel opens by itself — click the dashed project tab to link it, (3) click the '☰ Plan' chip on a row, (4) back in the panel the chip turns blue and hovering the row shows a ×">
+
+1. **Link the workspace to a project**: right-click the workspace row in the left sidebar → *Link Jira project…*.
+   A workspace holds one project at a time; linking another one moves it over, and the menu item becomes
+   *Unlink Jira project* once something is linked.
+2. **Click a project tab**: the panel opens by itself and the header reads "Click a project tab above to link it
+   to the current workspace." Candidate tabs carry a **dashed** outline — click one to link it; the header then
+   reads "This workspace is linked to APP". Candidates appear only after the panel has fetched issues once, so
+   hit *Refresh* if there are none.
+3. **Click the `☰ Plan` chip at the end of a row**: creates a planning-mode session in that project's workspace.
+   The first message only asks for a bullet list of the edits to make, and you agree to it in the conversation.
+   `deepseek-ai/dsh-plan-mode` is optional — a built-in policy is used when it is absent.
+4. **Back in the panel**: the chip turns blue (`on`) = planned. Hovering the row reveals a `×` that archives the
+   session and clears the binding (recoverable from the archive).
+
+The real panel, for comparison (the two planned rows near the top are outlined):
+
 <img src="docs/images/panel-plan.png" width="1040" alt="Rows with the '☰ Plan' chip: the two planned rows near the top are outlined because they are bound to a planning conversation, the rest are not">
+
+#### "Plan" does nothing or shows an error
+
+| What you see | Why | What to do |
+| --- | --- | --- |
+| `Project APP is not linked to a workspace: link it from the sidebar first.` | The project is not linked to any workspace (or the mapping was lost) | Redo steps 1–2 above |
+| No candidate tabs / `No projects to link yet: open the panel once so the project list loads.` | The panel has never fetched issues successfully | Hit *Refresh*; if it still fails, set the site / email / token first |
+| The workspace context menu has no *Link Jira project…* | The client half of the plugin did not register (the host row can still read active) | Reinstall the bundle and reload the page |
+| The chip stays grey and does nothing | The previous session creation has not returned yet | Wait for it; a failure shows `Could not create the planning session: …` |
+| It always reopens the same conversation | One issue maps to one planning session (by design) | Click `×` to archive it, then click *Plan* again |
+| The first message says the Jira issue is unclear | The card is missing key fields: no summary / description / parent or links | Fill those in on Jira and click *Plan* again |
 
 <img src="docs/images/panel-watch.png" width="1040" alt="The live-change banner and a row with its status dropdown open (To Do / In Progress / IN QA / Done)">
 

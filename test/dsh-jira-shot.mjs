@@ -17,6 +17,7 @@
  * 产出（默认写进 `docs/images/`，被两份 README 引用）：
  *   panel.png            浮层列表（分组 / 优先级底色 / 状态筛选 / 项目 tab）
  *   panel-watch.png      实时监视横幅 + 某一行展开的状态流转下拉
+ *   plan-flow.png        绑定工作区 → 点「计划」的四步图解（示意图，不是真截图）
  *   sidebar-entry.png    左侧栏入口 + 未读角标
  *   zh 版本加 `.zh` 后缀
  */
@@ -796,6 +797,152 @@ function panelHtml(name, panel) {
   return pageHtml(name, `<div class="shot"><div class="shot-main">${serialize(panel)}</div></div>`);
 }
 
+
+/* ------------------------------------------------------------------ 「计划」四步图解 */
+
+/**
+ * 绑定工作区 → 点「计划」的四步图解。
+ * 不是真截图（真截图拍不到「右键菜单 + 系统会话切换」），所以用面板同一套 CSS token 画示意卡片，
+ * 文案与 client.js 的 M 字典逐字对齐，免得图和真实界面说两套话。
+ */
+const PLAN_FLOW = {
+  zh: {
+    steps: [
+      {
+        n: '1', title: '把工作区关联到一个 Jira 项目',
+        mock: 'menu',
+        note: '左侧栏里对工作区那一行右键 →「关联 Jira 项目…」。一个工作区同时只挂一个项目；换项目时，原项目会让出这个工作区。',
+      },
+      {
+        n: '2', title: '点项目 tab，完成关联',
+        mock: 'tabs',
+        note: '菜单点完面板会自动打开，顶部提示「点上面的项目 tab，把它关联到当前工作区。」——候选 tab 带虚线框，点哪个就挂哪个。候选要等面板至少拉到过一次 issue 才会出现。',
+      },
+      {
+        n: '3', title: '点任务行末尾的「☰ 计划」',
+        mock: 'row',
+        note: '在该项目绑定的工作区里新建一条 plan 模式会话：首条消息只要求「列出将要执行的修改任务」，你敲定后才动手；卡片信息不全时会中断并说明缺什么。',
+      },
+      {
+        n: '4', title: '回到面板：按钮变蓝 = 已计划',
+        mock: 'rowon',
+        note: '再点只打开原来那条对话，不会重复建；鼠标移到行上会出现 ×，点它把会话归档并解绑（可从归档区恢复）。',
+      },
+    ],
+    workspace: 'dsh-jira-work-overview',
+    menuLink: '关联 Jira 项目…',
+    hint: '点上面的项目 tab，把它关联到当前工作区。',
+    cancel: '取消',
+    all: '全部项目 12', project: 'APP 9', other: 'OPS 3',
+    key: 'APP-412', summary: '结算页偶发 500', status: '进行中', plan: '计划',
+  },
+  en: {
+    steps: [
+      {
+        n: '1', title: 'Link the workspace to a Jira project',
+        mock: 'menu',
+        note: 'Right-click the workspace row in the left sidebar → “Link Jira project…”. A workspace holds one project at a time; linking another moves it over.',
+      },
+      {
+        n: '2', title: 'Click a project tab to finish',
+        mock: 'tabs',
+        note: 'The panel opens with “Click a project tab above to link it to the current workspace.” — candidate tabs are dashed; click one to link it. Candidates appear once the panel has fetched issues.',
+      },
+      {
+        n: '3', title: 'Click the “☰ Plan” chip on a row',
+        mock: 'row',
+        note: 'Creates a planning-mode session in that project’s workspace: the first message only asks for the list of edits to make; nothing runs until you confirm. A card missing key fields stops and says what is missing.',
+      },
+      {
+        n: '4', title: 'Back in the panel: blue = planned',
+        mock: 'rowon',
+        note: 'Clicking again only reopens that conversation — never a second one. Hovering the row shows ×; it archives the session and unbinds it (recoverable from the archive).',
+      },
+    ],
+    workspace: 'dsh-jira-work-overview',
+    menuLink: 'Link Jira project…',
+    hint: 'Click a project tab above to link it to the current workspace.',
+    cancel: 'Cancel',
+    all: 'All projects 12', project: 'APP 9', other: 'OPS 3',
+    key: 'APP-412', summary: 'Checkout page: intermittent 500', status: 'In Progress', plan: 'Plan',
+  },
+};
+
+const PLAN_FLOW_CSS = `
+body{background:color-mix(in srgb, var(--dsw-alias-bg-base,#fff) 94%, var(--dsw-alias-label-primary,#1b1d22))}
+.pf{height:100%;box-sizing:border-box;padding:20px;display:grid;grid-template-columns:1fr 1fr;grid-auto-rows:1fr;gap:16px;
+  font:12px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  color:var(--dsw-alias-label-primary,#1b1d22)}
+.pf-card{display:flex;flex-direction:column;gap:10px;padding:14px 16px;border-radius:12px;
+  background:var(--dsw-alias-bg-layer-1,#fff);border:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.07));
+  box-shadow:0 2px 10px rgba(20,28,45,.05)}
+.pf-head{display:flex;align-items:center;gap:9px}
+.pf-num{flex:none;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  font-size:11.5px;font-weight:600;color:#fff;background:var(--dsw-alias-brand-primary,#4d6bfe)}
+.pf-title{font-size:13px;font-weight:600;letter-spacing:.1px}
+.pf-note{margin:0;font-size:11.5px;line-height:1.62;color:var(--dsw-alias-label-secondary,#5c6270)}
+.pf-mock{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border-radius:9px;
+  background:var(--dsw-alias-bg-base,#fff);border:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.07))}
+.pf-wsrow{display:flex;align-items:center;gap:7px;padding:4px 7px;border-radius:7px;font-size:11.5px;font-weight:500;
+  background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06))}
+.pf-wsico{font-size:9px;opacity:.55}
+.pf-menu{display:flex;flex-direction:column;align-self:flex-start;min-width:190px;padding:5px;border-radius:8px;
+  background:var(--dsw-alias-bg-layer-2,#fff);border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.1));
+  box-shadow:0 6px 18px rgba(0,0,0,.12)}
+.pf-mi{padding:3px 8px;border-radius:5px;font-size:11.5px;color:var(--dsw-alias-label-secondary,#5c6270)}
+.pf-mi.dim{opacity:.35}
+.pf-mi.hi{color:var(--dsw-alias-brand-primary,#4d6bfe);font-weight:600;
+  background:color-mix(in srgb,var(--dsw-alias-brand-primary,#4d6bfe) 10%,transparent)}
+.pf-notice{display:flex;align-items:center;gap:8px;padding:4px 9px;border-radius:7px;font-size:11.5px;
+  color:var(--dsw-alias-label-secondary,#5c6270);
+  background:color-mix(in srgb,var(--dsw-alias-brand-primary,#4d6bfe) 8%,transparent)}
+.pf-cancel{margin-left:auto;flex:none;font-size:10.5px;opacity:.75}
+.pf-tabs{display:flex;gap:6px}
+.pf-tab{padding:2px 9px;border-radius:999px;font-size:11px;border:1px solid var(--dsw-alias-border-l2,rgba(38,49,72,.18));
+  color:var(--dsw-alias-label-secondary,#5c6270)}
+.pf-tab.target{outline:2px dashed color-mix(in srgb,var(--dsw-alias-brand-primary,#4d6bfe) 55%,transparent);outline-offset:1px;
+  color:var(--dsw-alias-label-primary,#1b1d22);font-weight:600}
+.pf-row{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:7px;font-size:11.5px}
+.pf-key{font-weight:600;color:var(--dsw-alias-link,#4d6bfe)}
+.pf-sum{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.pf-badge{flex:none;padding:1px 7px;border-radius:6px;font-size:11px;color:var(--dsw-alias-label-secondary,#5c6270);
+  background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06))}
+.pf-plan{flex:none;display:inline-flex;align-items:center;gap:4px;padding:1px 7px;border-radius:6px;font-size:11px;
+  border:1px solid transparent;color:var(--dsw-alias-label-secondary,#5c6270)}
+.pf-plan.on{color:var(--dsw-alias-brand-primary,#4d6bfe);border-color:var(--dsw-alias-brand-primary,#4d6bfe);
+  background:color-mix(in srgb,var(--dsw-alias-brand-primary,#4d6bfe) 8%,transparent)}
+.pf-plan .pf-ico{font-size:9.5px;line-height:1}
+.pf-x{flex:none;padding:0 4px;font-size:11px;color:var(--dsw-alias-label-tertiary,#8a8f99)}
+`;
+
+function planFlowHtml(lang) {
+  const copy = PLAN_FLOW[lang] ?? PLAN_FLOW.en;
+  const mocks = {
+    menu: `<div class="pf-mock">
+      <div class="pf-wsrow"><span class="pf-wsico">▸</span><span>${copy.workspace}</span></div>
+      <div class="pf-menu"><div class="pf-mi dim">⋯</div><div class="pf-mi hi">${copy.menuLink}</div><div class="pf-mi dim">⋯</div></div>
+    </div>`,
+    tabs: `<div class="pf-mock">
+      <div class="pf-notice"><span>${copy.hint}</span><span class="pf-cancel">${copy.cancel}</span></div>
+      <div class="pf-tabs"><span class="pf-tab">${copy.all}</span><span class="pf-tab target">${copy.project}</span><span class="pf-tab">${copy.other}</span></div>
+    </div>`,
+    row: `<div class="pf-mock">
+      <div class="pf-row"><span class="pf-key">${copy.key}</span><span class="pf-sum">${copy.summary}</span>
+        <span class="pf-badge">${copy.status}</span><span class="pf-plan"><span class="pf-ico">☰</span>${copy.plan}</span></div>
+    </div>`,
+    rowon: `<div class="pf-mock">
+      <div class="pf-row"><span class="pf-key">${copy.key}</span><span class="pf-sum">${copy.summary}</span>
+        <span class="pf-plan on"><span class="pf-ico">☰</span>${copy.plan}</span><span class="pf-x">×</span></div>
+    </div>`,
+  };
+  const cards = copy.steps.map((step) => `<div class="pf-card">
+      <div class="pf-head"><span class="pf-num">${step.n}</span><span class="pf-title">${step.title}</span></div>
+      ${mocks[step.mock]}
+      <p class="pf-note">${step.note}</p>
+    </div>`).join('');
+  return pageHtml('plan-flow', `<style>${PLAN_FLOW_CSS}</style><div class="pf">${cards}</div>`);
+}
+
 for (const lang of LANGS) {
   const suffix = lang === 'zh' ? '.zh' : '';
 
@@ -903,6 +1050,10 @@ for (const lang of LANGS) {
     shot(`panel-plan${suffix}`, panelHtml('panel-plan', panel), PANEL_W, PLAN_SHOT_H);
   }
 
+  /* --- 7) 「计划」四步图解（示意图）：绑定工作区 → 点计划 → 回来看绑定态 --- */
+  if (WANTED('plan-flow')) {
+    shot(`plan-flow${suffix}`, planFlowHtml(lang), 1040, 470);
+  }
   /* --- 3) 左侧栏入口（带未读角标） --- */
   if (WANTED('sidebar-entry')) {
     transport.watchState.payload = UNREAD_WATCH;
