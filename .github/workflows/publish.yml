@@ -100,7 +100,11 @@ jobs:
             console.log(createHash("sha1").update(readFileSync(require("node:path").join(dir, f))).digest("hex"))
           ' "$RUNNER_TEMP")"
           META=""
-          for attempt in $(seq 1 24); do
+          # npm answers "Your package is being processed and may take a few minutes to become available":
+          # on 0.16.1 the version metadata appeared ~2 min after the upload and the tarball a few minutes
+          # later, which is why this waits up to 5 minutes instead of 2 (the 0.16.1 run went red only
+          # because the publish itself outlived the 120 s window, not because anything was wrong).
+          for attempt in $(seq 1 60); do
             META="$(curl -fsS "https://registry.npmjs.org/$PKG/$VERSION" 2>/dev/null || true)"
             if [ -n "$META" ]; then
               echo "registry serves $PKG@$VERSION (attempt $attempt)"
