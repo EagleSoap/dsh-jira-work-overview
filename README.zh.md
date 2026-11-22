@@ -530,6 +530,7 @@ Zed（`zed`）、Sublime Text（`subl`）、gedit（`gedit`）——**找到可�
 | 0.14.0 | 2026-11-19 | 功能 | 高亮挂到 **Jira 自己的优先级名次**；**首次发布到 npm** |
 | 0.15.0 | 2026-11-19 | 功能 | 改状态**不再全量重拉**、自己改的状态不再通知自己、失败提示按类型 |
 | 0.15.1 | 2026-11-19 | **修复** | 四条 `/api` 路由在真宿主里没注册（404） |
+| 0.16.1 | 2026-11-22 | 修复 | Windows 通知与「在文件管理器中显示」、Linux 编辑器直选、UNC 路径；三平台 CI 与发版预检；README 补计划会话图解 |
 | 0.16.0 | 2026-11-20 | 功能 | **整站搜索**、**按 epic 分组**、任务行**「计划」**（plan 模式会话） |
 
 > 0.1.0–0.12.0 这 15 个版本都发生在 2026-11-18 同一天；0.13.0 起才有 tag 与 Release。
@@ -552,6 +553,11 @@ plugin_manager install_bundle(target="dsh-jira-work-overview")  # 已装过则�
 
 | 版本 | 现象 | 原因 / 处理 |
 | --- | --- | --- |
+| 0.16.1 | Windows 上新任务 / 状态变化**一条通知都没有**（macOS 正常） | Windows 的 Toast 必须挂在一个**已注册的** AUMID 上，未注册时 `CreateToastNotifier()` 抛 `Element not found (0x80070490)`，而它被静默吞掉了。现在按 `DSH_NOTIFY_AUMID` → `DeepSeek Harness` → `com.deepseek.harness` → 系统自带的 PowerShell AUMID 依次试；脚本里的语句改用换行拼接（`{; try … }` 是 PowerShell 语法错误，整段都不执行） |
+| 0.16.1 | Windows 上「在文件管理器中显示」明明已打开，却报 `打开失败` | `explorer.exe /select,` 成功时也返回退出码 1，被当成了失败。现在这个分支允许非零退出码，只有进程根本起不来才算失败 |
+| 0.16.1 | profile 放在网络共享盘上时，配置文件被当成「路径未知」，打开 / 显示全都用不了 | 绝对路径判定只认 `/…` 与 `C:\…`。现在也认 UNC（`\\server\share\…`） |
+| 0.16.1 | Linux 上编辑器直选「点了没反应」，从桌面启动器打开也失败 | 只存了命令名，而桌面会话的 `PATH` 是最小集。现在探测 `PATH` + `/usr/local/bin`、`/usr/bin`、`/snap/bin`、flatpak、`~/.local/bin` 等常见位置（只认可执行），启动时一律用绝对路径 |
+| 0.16.1 | clone 下来在干净机器上跑测试直接崩：`ENOENT … .dsh_jira_env`；没有站点凭据时 `transition` 套件抛错退出 1 | 缺 env 文件就建一个空的（目录不存在先 `mkdirSync`）；没有凭据改为 `SKIP: …` + `exit 0`（测试约定是跳过，不是失败） |
 | 0.16.0 | 点「×」报 `归档计划对话失败：no workspaces service` / `这个 profile 没有提供工作区归档通道` | 取错了门面：`ctx.get('workspaces')` 拿不到东西（注册表叫 `workspaceRegistry`），遥控命名空间是 `workspace` 不是 `workspaces`。改成依次试 `remote.workspace.archiveSession` → 工作区注册表本体 → `connection.call('workspace/archiveSession')` |
 | 0.16.0 | 删掉计划对话后再点「计划」，打开的是已归档的那条 | 面板取绑定带 `force: true`（只回映射、不翻会话日志），host 现建路径带 `skipToken: true` |
 | 0.16.0 | 点「计划」报 `cannot get property "remote.session" without inject` | 改成用基座常驻的 `sessions.create({ workspaceId })` + `sessions.using(id, …)`，与聊天框同一条路 |

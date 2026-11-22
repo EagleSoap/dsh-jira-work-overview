@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-11-22
+
 ### Fixed
 
 - **Windows：桌面通知一条都不弹。** Windows 的 Toast 必须挂在一个**已注册的** AUMID 上才能

@@ -277,6 +277,7 @@ The current version is **0.16.0** (2026-11-20). The changelog records 30 version
 | 0.14.0 | 2026-11-19 | feature | highlight follows **Jira's own priority order**; **first npm release** |
 | 0.15.0 | 2026-11-19 | feature | transitions update **in place**, your own changes no longer notify you, typed failure hints |
 | 0.15.1 | 2026-11-19 | **fix** | the four `/api` routes were never registered in a real host (404) |
+| 0.16.1 | 2026-11-22 | fix | Windows notifications and *Show in file manager*, the Linux editor picker, UNC patch paths; three-OS CI and the release preflight; a planning walkthrough in both READMEs |
 | 0.16.0 | 2026-11-20 | feature | **site-wide search**, **group by epic**, the **计划** (plan) button on every row |
 
 > 0.1.0–0.12.0 all happened on 2026-11-18; tags and GitHub Releases start at 0.13.0.
@@ -298,6 +299,11 @@ Every user-visible defect, newest first (implementation detail is in the matchin
 
 | Version | Symptom | Cause / fix |
 | --- | --- | --- |
+| 0.16.1 | On Windows, new assignments and status changes produced **no notification at all** | A Windows toast must be posted under a **registered** AUMID; an unregistered one makes `CreateToastNotifier()` throw `Element not found (0x80070490)`, which was swallowed. It now tries `DSH_NOTIFY_AUMID` → `DeepSeek Harness` → `com.deepseek.harness` → the built-in PowerShell AUMID in order; the script statements are joined with newlines (`{; try … }` is a PowerShell syntax error, so nothing ran) |
+| 0.16.1 | On Windows, *Show in file manager* opened Explorer but still reported a failure | `explorer.exe /select,` exits with code 1 even on success. That branch now tolerates a non-zero exit; only a process that never starts counts as a failure |
+| 0.16.1 | With the profile on a network share, the config file was treated as an unknown path | Absolute-path detection only accepted `/…` and `C:\…`. It now also accepts UNC paths (`\\server\share\…`) |
+| 0.16.1 | On Linux the editor picker "did nothing" and launches from a desktop launcher failed | Only the command name was stored, and a desktop session has a minimal `PATH`. Detection now covers `PATH` plus `/usr/local/bin`, `/usr/bin`, `/snap/bin`, flatpak exports, `~/.local/bin` and friends (executables only), and launch always uses the absolute path |
+| 0.16.1 | A fresh clone crashed the test suite: `ENOENT … .dsh_jira_env`; without site credentials the `transition` suite exited 1 | A missing env file is created empty (`mkdirSync` first when the directory is missing), and missing credentials now print `SKIP: …` and `exit 0` — suites skip, they do not fail |
 | 0.16.0 | `×` fails with `归档计划对话失败：no workspaces service` / `这个 profile 没有提供工作区归档通道` | wrong facade: `ctx.get('workspaces')` is empty (the registry is `workspaceRegistry`) and the remote namespace is `workspace`, not `workspaces`. Now tries `remote.workspace.archiveSession` → the workspace registry itself → `connection.call('workspace/archiveSession')` |
 | 0.16.0 | after deleting a plan session, 计划 reopens the archived one | the panel now fetches the binding with `force: true` (mapping only, no log scan) and the fresh-create path passes `skipToken: true` |
 | 0.16.0 | 计划 throws `cannot get property "remote.session" without inject` | now uses the base's `sessions.create({ workspaceId })` + `sessions.using(id, …)` — the same path as the chat box |

@@ -1,6 +1,6 @@
 {
   "name": "dsh-jira-work-overview",
-  "version": "0.16.0",
+  "version": "0.16.1",
   "description": "Show your Jira work items and their workflow status inside DeepSeek Harness (DSH) · 在 DSH 里查看我的 Jira 工作项与完成状态",
   "license": "MIT",
   "author": "Zhaohong Fei",
