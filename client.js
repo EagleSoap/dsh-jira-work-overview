@@ -3740,15 +3740,21 @@ window.__ModuleLoader__.load({
         }, CredentialSettings));
 
         // 左栏「工作区」行的右键菜单：关联 / 取消关联 Jira 项目。
-        // 结构化菜单是抽象贡献（不是 React 组件），只能在 ctx.contextMenus 上注册（dsh-client-ui-context-menu）。
-        const contextMenus = typeof ctx.get === 'function' ? ctx.get('contextMenus') : undefined;
-        if (contextMenus && typeof contextMenus.register === 'function') {
+        // 结构化菜单是抽象贡献（不是 React 组件），只能注册在 dsh-client-ui-context-menu 的
+        // `contextMenus` 服务上。**这个服务不保证在本插件 apply 时已经就绪**：浏览器侧的插件入口
+        // 是并发创建的，本插件只 inject 了 slots / remote，而 contextMenus 自己还要等 locale、
+        // shortcuts（0.16.1 及以前这里直接 ctx.get 一次，拿到 undefined 就整页都没有这条菜单 ——
+        // 「关联 Jira 项目…」随机消失就是这么来的）。现在用 ctx.inject 等它出现再注册；
+        // 老基座没有 ctx.inject 时退回直接注册。
+        function registerWorkspaceProjectMenu(host) {
+          const contextMenus = typeof host.get === 'function' ? host.get('contextMenus') : undefined;
+          if (!contextMenus || typeof contextMenus.register !== 'function') return;
           try {
-            ctx.effect?.(() => contextMenus.register({
+            host.effect?.(() => contextMenus.register({
               id: `${PLUGIN_ID}.workspace-project`,
               target: 'workspace',
               order: 500,
-              observe: () => [runtime.ctx && ctx.get('workspaces') ? ctx.get('workspaces').list : undefined].filter(Boolean),
+              observe: () => [host.get('workspaces')?.list].filter(Boolean),
               resolve: (target) => {
                 const entries = [projectMenuEntry(target)];
                 const unlink = projectUnlinkEntry(target);
@@ -3756,6 +3762,21 @@ window.__ModuleLoader__.load({
                 return entries;
               },
             }), `${NS}: workspace project menu`);
+          } catch (error) {
+            console.warn(`${NS}: workspace menu unavailable`, error);
+          }
+        }
+        if (typeof ctx.inject === 'function') {
+          ctx.inject(['contextMenus'], (child) => {
+            try {
+              registerWorkspaceProjectMenu(child);
+            } catch (error) {
+              console.warn(`${NS}: workspace menu unavailable`, error);
+            }
+          });
+        } else {
+          try {
+            registerWorkspaceProjectMenu(ctx);
           } catch (error) {
             console.warn(`${NS}: workspace menu unavailable`, error);
           }

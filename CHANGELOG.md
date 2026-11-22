@@ -6,6 +6,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Fixed
+
+- **左栏工作区的右键菜单里「关联 Jira 项目…」会整页消失（绑定选项没了）。** 浏览器侧的插件入口是
+  **并发创建**的（`dsh-client-modules` 用 `Promise.all` 同时 `create` 每个插件），本插件只 inject
+  `slots` / `remote`，而 `contextMenus` 服务自己还要等 `locale`、`shortcuts` —— 所以 `apply()` 时它
+  经常还没 `provide`。旧代码在这里只 `ctx.get('contextMenus')` 拿一次，拿不到就跳过注册，这一页就
+  再也没有「关联 / 取消关联 Jira 项目」——面板、角标都正常，只有右键菜单少东西。现在改用
+  `ctx.inject(['contextMenus'], child => …)` 等服务出现再注册（官方 `dsh-client-ui-file-actions`
+  同款写法）；老基座没有 `ctx.inject` 时退回直接注册。新增离线套件
+  `test/dsh-jira-workspace-menu.mjs` 专门模拟「服务晚到」。
+
 ## [0.16.1] - 2026-11-22
 
 ### Fixed

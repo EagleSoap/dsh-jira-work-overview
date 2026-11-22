@@ -13,7 +13,7 @@ const RELEASE = process.argv.includes('--release');
 
 // 真站点套件（status / transition / sprint / smoke*）在没凭据时会自己 SKIP 并 exit 0。
 const SUITES = [
-  'bundle-id', 'release', 'platform', 'visual', 'credential', 'plan', 'i18n',
+  'bundle-id', 'release', 'platform', 'visual', 'credential', 'plan', 'workspace-menu', 'i18n',
   'search', 'epic', 'selfwatch', 'json', 'smoke', 'smoke3', 'due', 'sprint', 'status', 'transition',
 ];
 
