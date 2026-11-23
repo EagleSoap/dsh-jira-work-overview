@@ -277,6 +277,7 @@ The current version is **0.16.0** (2026-11-20). The changelog records 30 version
 | 0.14.0 | 2026-11-19 | feature | highlight follows **Jira's own priority order**; **first npm release** |
 | 0.15.0 | 2026-11-19 | feature | transitions update **in place**, your own changes no longer notify you, typed failure hints |
 | 0.15.1 | 2026-11-19 | **fix** | the four `/api` routes were never registered in a real host (404) |
+| 0.16.3 | 2026-11-23 | **fix** | the Jira site URL is now an editable field in the config page (placeholder = current URL, saved to the profile Cordis patch); the failure hint's **Configure** button matches **Save and verify** |
 | 0.16.2 | 2026-11-23 | **fix** | the workspace context menu's **Link Jira project…** could vanish for a whole page (client startup race); covered by a new offline suite |
 | 0.16.1 | 2026-11-22 | fix | Windows notifications and *Show in file manager*, the Linux editor picker, UNC patch paths; three-OS CI and the release preflight; a planning walkthrough in both READMEs |
 | 0.16.0 | 2026-11-20 | feature | **site-wide search**, **group by epic**, the **计划** (plan) button on every row |
