@@ -214,6 +214,12 @@ window.__ModuleLoader__.load({
         credGroupQuery: '查询',
         credGroupWatch: '后台监视',
         fBaseUrl: '服务地址',
+        baseUrlSave: '保存地址',
+        baseUrlSaving: '保存中…',
+        baseUrlSaved: 'Jira 站点地址已更新为 {baseUrl}，立刻生效。',
+        baseUrlSaveFailed: '保存站点地址失败：{message}',
+        baseUrlHint: '改完点「保存地址」立刻生效（写进当前 profile 的 Cordis patch），不用重装插件；输入框留空 = 不修改。',
+        baseUrlPlaceholderFallback: 'https://your-site.atlassian.net',
         fEmail: '账号邮箱',
         fProject: '项目',
         fBoard: '看板',
@@ -269,7 +275,7 @@ window.__ModuleLoader__.load({
         credClearFailed: '删除失败：{message}',
         credTokensLink: '在 Atlassian 里新建 / 吊销令牌',
         credNote: '令牌只写进 DSH 凭据库，界面永远只显示打码首尾；换完立刻生效，不用重启 DSH。',
-        credOther: '其余配置（baseUrl、邮箱、监视间隔等）写在 profile 的 cordis.patch.yml 里；这个页面只改令牌。',
+        credOther: '其余配置（超时、项目、看板等）写在 profile 的 cordis.patch.yml 里；这个页面改令牌、邮箱、站点地址与监视设置。',
         credOpen: '配置',
         credClose: '收起令牌设置',
         patchTitle: '配置文件',
@@ -442,6 +448,12 @@ window.__ModuleLoader__.load({
         credGroupQuery: 'Query',
         credGroupWatch: 'Background watch',
         fBaseUrl: 'Base URL',
+        baseUrlSave: 'Save URL',
+        baseUrlSaving: 'Saving…',
+        baseUrlSaved: 'Jira site URL updated to {baseUrl}; effective immediately.',
+        baseUrlSaveFailed: 'Saving the site URL failed: {message}',
+        baseUrlHint: 'Click "Save URL" to apply it immediately (it is written into the current profile\'s Cordis patch) — no reinstall needed; leave the field empty to keep the current value.',
+        baseUrlPlaceholderFallback: 'https://your-site.atlassian.net',
         fEmail: 'Account email',
         fProject: 'Project',
         fBoard: 'Board',
@@ -497,7 +509,7 @@ window.__ModuleLoader__.load({
         credClearFailed: 'Removing failed: {message}',
         credTokensLink: 'Create or revoke tokens at Atlassian',
         credNote: 'The token goes into the DSH credential store only, and the UI ever shows the masked head and tail; a saved token takes effect at once, no restart needed.',
-        credOther: 'The rest of the configuration (baseUrl, email, watch interval…) lives in the profile\'s cordis.patch.yml; this page only changes the token.',
+        credOther: 'The rest of the configuration (timeout, project, board…) lives in the profile\'s cordis.patch.yml; this page changes the token, email, site URL and watch settings.',
         credOpen: 'Configure',
         credClose: 'Hide token settings',
         patchTitle: 'Configuration file',
@@ -3120,6 +3132,11 @@ window.__ModuleLoader__.load({
         // 账号邮箱是可改字段，和令牌一起保存（Basic 认证 = 邮箱 + 令牌）。
         email: '',
         emailTouched: false,
+        // Jira 站点地址：输入框默认留空、placeholder 显示当前生效地址；填了才写。
+        baseUrlDraft: '',
+        baseUrlBusy: false,
+        baseUrlMessage: '',
+        baseUrlError: '',
         busy: '',
         message: '',
         error: '',
@@ -3139,6 +3156,7 @@ window.__ModuleLoader__.load({
       let watchDebounce = null;
       let watchFlashTimer = null;
       let patchFlashTimer = null;
+      let baseUrlFlashTimer = null;
 
       function readWatch(payload, previous) {
         const watch = payload?.watch ?? previous?.watch ?? null;
@@ -3230,6 +3248,38 @@ window.__ModuleLoader__.load({
       function emailChanged() {
         const current = String(state.status?.email ?? '').trim();
         return state.email.trim() !== current;
+      }
+
+      // 站点地址：写进当前 profile 的 Cordis patch（volatile 字段），下一次请求就用新地址。
+      // 输入框本身留空、placeholder 显示当前值；空输入不发请求（= 不修改）。
+      async function saveBaseUrl() {
+        const value = state.baseUrlDraft.trim();
+        if (!value) return;
+        clearTimeout(baseUrlFlashTimer);
+        setState((prev) => ({ ...prev, baseUrlBusy: true, baseUrlMessage: '', baseUrlError: '' }));
+        try {
+          const response = await watchFetch(SETTINGS_PATH, {
+            method: 'POST',
+            headers: { accept: 'application/json', 'content-type': 'application/json' },
+            body: JSON.stringify({ baseUrl: value }),
+          });
+          const payload = await response.json().catch(() => null);
+          if (payload?.ok !== true) throw new Error(payload?.error || `HTTP ${response.status}`);
+          setState((prev) => ({
+            ...prev,
+            baseUrlBusy: false,
+            baseUrlDraft: '',
+            baseUrlError: '',
+            baseUrlMessage: t('baseUrlSaved', { baseUrl: String(payload?.applied?.baseUrl ?? value) }),
+            // 保存成功顺带刷新一遍状态：placeholder 立刻显示新的生效地址。
+            ...readWatch(payload, prev),
+          }));
+          baseUrlFlashTimer = setTimeout(() => setState((prev) => ({ ...prev, baseUrlMessage: '' })), 2600);
+          if (typeof baseUrlFlashTimer?.unref === 'function') baseUrlFlashTimer.unref();
+          void refresh();
+        } catch (error) {
+          setState((prev) => ({ ...prev, baseUrlBusy: false, baseUrlError: t('baseUrlSaveFailed', { message: String(error?.message ?? error) }) }));
+        }
       }
 
       // 监视设置「改了就生效」：开关一拨、间隔一改就写进当前 profile 的 Cordis patch，
@@ -3509,7 +3559,43 @@ window.__ModuleLoader__.load({
           h('a', { key: 'tokens', className: 'jmw-cred-link', href: TOKENS_URL, target: '_blank', rel: 'noreferrer' }, t('credTokensLink')),
         ]),
         credGroup('connection', t('credGroupConnection'), [
-          credPair('baseUrl', t('fBaseUrl'), settings.baseUrl),
+          // 站点地址改成可编辑输入框：留空 = 不修改，placeholder 显示当前生效的地址。
+          h('div', { key: 'baseUrl', className: 'jmw-cred-form' }, [
+            h('label', { key: 'label', className: 'jmw-cred-label', htmlFor: 'jmw-base-url' }, t('fBaseUrl')),
+            h('input', {
+              key: 'input',
+              id: 'jmw-base-url',
+              className: 'jmw-cred-input',
+              type: 'url',
+              inputMode: 'url',
+              autoComplete: 'off',
+              spellCheck: false,
+              placeholder: String(settings.baseUrl ?? '') || t('baseUrlPlaceholderFallback'),
+              value: state.baseUrlDraft,
+              onInput: (event) => setState((prev) => ({
+                ...prev,
+                baseUrlDraft: event?.target?.value ?? '',
+                baseUrlMessage: '',
+                baseUrlError: '',
+              })),
+              onKeyDown: (event) => {
+                if (event?.key === 'Enter') void saveBaseUrl();
+              },
+            }),
+            h('div', { key: 'actions', className: 'jmw-cred-actions' }, [
+              h('button', {
+                key: 'save',
+                type: 'button',
+                className: 'jmw-cred-btn primary',
+                style: BTN_PRIMARY,
+                disabled: state.baseUrlBusy === true || state.baseUrlDraft.trim() === '',
+                onClick: () => { void saveBaseUrl(); },
+              }, state.baseUrlBusy ? t('baseUrlSaving') : t('baseUrlSave')),
+            ]),
+            h('div', { key: 'hint', className: 'jmw-cred-hint' }, t('baseUrlHint')),
+            state.baseUrlMessage ? h('div', { key: 'message', className: 'jmw-cred-msg ok' }, state.baseUrlMessage) : null,
+            state.baseUrlError ? h('div', { key: 'error', className: 'jmw-cred-msg err' }, state.baseUrlError) : null,
+          ]),
         ]),
         credGroup('query', t('credGroupQuery'), [
           h('div', { key: 'results', className: 'jmw-cred-row' }, [

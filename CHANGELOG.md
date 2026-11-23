@@ -6,6 +6,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+
+- **配置页「Jira 连接」里的服务地址现在是可编辑输入框。** 输入框默认留空、placeholder 显示当前生效的
+  地址；填好点「保存地址」（或回车）就写进当前 profile 的 Cordis patch（`baseUrl` 改成 volatile 字段），
+  保存后立刻生效，不用重装插件。只接受完整的 `http(s)` 地址（自动去掉尾部斜杠），空值 / 其它协议直接
+  拒绝并在页面上报错；「其余配置写在 cordis.patch.yml 里，这个页面只改令牌」的说明也同步改掉了。
+
 ## [0.16.2] - 2026-11-23
 
 ### Fixed

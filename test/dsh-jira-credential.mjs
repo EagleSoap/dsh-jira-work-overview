@@ -560,7 +560,7 @@ console.log('未配置时显示:', field(page, 'jmw-cred-none') !== undefined, '
 console.log('输入框存在:', field(page, 'jmw-cred-input') !== undefined, '| 邮箱输入框:', field(page, 'jmw-cred-email') !== undefined,
   '| 邮箱回填:', field(page, 'jmw-cred-email')?.props?.value);
 console.log('保存按钮禁用（没输入、邮箱也没改）:', buttonByText(page, '保存并验证')?.props.disabled === true);
-console.log('只读项在「Jira 连接 / 查询」两组里:', collect(page, (row) => String(row.props?.className ?? '') === 'jmw-cred-groupbody').length === 4, '| 键值对:', collect(page, (row) => String(row.props?.className ?? '') === 'jmw-cred-pair').map((row) => text(row)).join(' ').slice(0, 90));
+console.log('站点地址是可编辑输入框:', collect(page, (row) => row.type === 'input' && row.props?.id === 'jmw-base-url').length === 1, '| 键值对（只读项）:', collect(page, (row) => String(row.props?.className ?? '') === 'jmw-cred-pair').map((row) => text(row)).join(' ').slice(0, 90));
 console.log('页面上有凭据库键说明:', text(page).includes('JIRA_API_TOKEN'), '| 有 Atlassian 链接:', collect(page, (row) => row.type === 'a' && String(row.props.href).includes('api-tokens')).length === 1);
 
 const input = field(page, 'jmw-cred-input');
@@ -661,6 +661,35 @@ if (resultsInput) {
   const zeroWrite = settingsWrites[settingsWrites.length - 1];
   console.log('输入 0 → 自动写入:', settingsWrites.length > beforeZero, '| maxResults:', zeroWrite?.ops.find((op) => op.path[0] === 'maxResults')?.value, '（期望 0 = 不限制）');
   credPage = renderCred('page');
+}
+// 站点地址：可编辑输入框，placeholder 显示当前生效地址；填了就写进 profile 的 Cordis patch
+const baseUrlInput = () => collect(credPage, (row) => row.type === 'input' && row.props?.id === 'jmw-base-url')[0];
+console.log('站点地址输入框:', baseUrlInput() !== undefined, '| 初始值:', JSON.stringify(baseUrlInput()?.props?.value ?? null),
+  '| placeholder = 当前地址:', baseUrlInput()?.props?.placeholder);
+console.log('空输入时保存按钮禁用:', buttonByText(credPage, '保存地址')?.props?.disabled === true);
+if (baseUrlInput()) {
+  baseUrlInput().props.onInput({ target: { value: 'https://new-site.atlassian.net/' } });
+  credPage = renderCred('page');
+  console.log('输入后保存按钮可用:', buttonByText(credPage, '保存地址')?.props?.disabled === false);
+  const beforeBaseUrl = settingsWrites.length;
+  buttonByText(credPage, '保存地址').props.onClick();
+  await wait(200);
+  credPage = renderCred('page');
+  const baseUrlWrite = settingsWrites[settingsWrites.length - 1];
+  console.log('保存地址 → 写入 profile patch:', settingsWrites.length > beforeBaseUrl,
+    '| baseUrl:', baseUrlWrite?.ops.find((op) => op.path[0] === 'baseUrl')?.value, '（尾斜杠应去掉）');
+  console.log('  placeholder 已更新为新地址:', baseUrlInput()?.props?.placeholder);
+  console.log('  输入框已清空:', (baseUrlInput()?.props?.value ?? '') === '');
+  console.log('  成功提示:', collect(credPage, (row) => classNameOf(row).includes('jmw-cred-msg') && classNameOf(row).includes('ok')).map((row) => text(row).trim()).join(' | ') || '(没有)');
+  // 非法地址：host 拒绝，界面报错且不写入
+  baseUrlInput().props.onInput({ target: { value: 'not a url' } });
+  credPage = renderCred('page');
+  const beforeBad = settingsWrites.length;
+  buttonByText(credPage, '保存地址').props.onClick();
+  await wait(200);
+  credPage = renderCred('page');
+  console.log('非法地址 → 被拒:', settingsWrites.length === beforeBad,
+    '| 错误文案:', collect(credPage, (row) => classNameOf(row).includes('jmw-cred-msg') && classNameOf(row).includes('err')).map((row) => text(row).trim()).join(' | '));
 }
 // 界面语言：三个 chip（自动 / 中文 / English），点了立刻写进 profile 的 Cordis patch
 // 迷你 React 不保留 key，所以按「文本是三种语言名之一」来找（配置页里不会同时出现状态下拉的 chip）

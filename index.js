@@ -295,6 +295,8 @@ const TEXT = {
     'err.noCredential': 'Jira 凭据缺失：请把 {key} 写进 DSH 凭据库、设为环境变量，或填进插件配置的 apiToken。',
     'err.credentialUnreadable': '读不出 DSH 凭据库里的 {key}：{message}',
     'err.noBaseUrl': '还没有配置 Jira 站点地址：打开面板标题右侧的「配置」填上 baseUrl（例如 https://your-site.atlassian.net），或在 profile 的 cordis.patch.yml 那一行里加 baseUrl。',
+    'err.baseUrlRequired': '请填上 Jira 站点地址（例如 https://your-site.atlassian.net）。',
+    'err.invalidBaseUrl': '「{value}」不是有效的 Jira 站点地址：要完整的 http(s) 地址，例如 https://your-site.atlassian.net。',
     'err.noEmail': 'Jira 配置缺少 email：Basic 认证需要登录邮箱。',
     'err.network': '连不上 {baseUrl}（{path}）：{cause}',
     'err.http': 'Jira {status} {statusText}（{path}）：{detail}',
@@ -496,6 +498,8 @@ const TEXT = {
     'err.noCredential': 'Missing Jira credential: put {key} into the DSH credential store, set it as an environment variable, or fill apiToken in the plugin config.',
     'err.credentialUnreadable': 'Could not read {key} from the DSH credential store: {message}',
     'err.noBaseUrl': 'No Jira site URL yet: open the "Configure" dialog in the panel header and set baseUrl (for example https://your-site.atlassian.net), or add baseUrl to this profile\'s cordis.patch.yml row.',
+    'err.baseUrlRequired': 'Enter the Jira site URL (for example https://your-site.atlassian.net).',
+    'err.invalidBaseUrl': '"{value}" is not a valid Jira site URL: use a full http(s) address such as https://your-site.atlassian.net.',
     'err.noEmail': 'Missing email in the Jira config: Basic auth requires a login email.',
     'err.network': 'Cannot reach {baseUrl} ({path}): {cause}',
     'err.http': 'Jira {status} {statusText} ({path}): {detail}',
@@ -723,8 +727,12 @@ export const inject = ['tools'];
  * `apiToken` 只为兼容旧版明文配置保留，首次加载后会迁移走。
  */
 export const Config = Schema.object({
+  // 站点地址是「运行时可改」的：配置页里是一个可编辑输入框，改完立刻生效（不用重装插件）。
+  // 因此和邮箱 / 监视设置一样标成 volatile —— 只有 volatile 字段才能经宿主 settings 服务写回
+  // 当前 profile 的 Cordis patch，并由 Loader 提交到运行中的引用。
   baseUrl: Schema.string()
     .default(DEFAULTS.baseUrl)
+    .volatile()
     .description(t('config.baseUrl')),
   email: Schema.string().default('').volatile().description(t('config.email')),
   credentialKey: Schema.string()
@@ -1046,6 +1054,31 @@ function limitOf(settings) {
   return normalizeLimit(liveSetting(settings, 'maxResults', DEFAULTS.maxResults));
 }
 
+/**
+ * 站点根地址（volatile，配置页可改）：每次现读，去首尾空白、去尾部斜杠。
+ * 改成 volatile 之后 `settings.baseUrl` 在运行时是引用对象，必须走 liveSetting 脱壳。
+ */
+function baseUrlOf(settings) {
+  const value = liveSetting(settings, 'baseUrl', '');
+  return typeof value === 'string' ? value.trim().replace(/\/+$/, '') : '';
+}
+
+/** 配置页写入的站点地址必须是完整的 http(s) URL；空串 / 其它协议一律拒绝。 */
+function normalizeBaseUrl(value) {
+  const text = String(unwrapValue(value) ?? '').trim().replace(/\/+$/, '');
+  if (!text) throw new Error(t('err.baseUrlRequired'));
+  let url;
+  try {
+    url = new URL(text);
+  } catch {
+    throw new Error(t('err.invalidBaseUrl', { value: text }));
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error(t('err.invalidBaseUrl', { value: text }));
+  }
+  return text;
+}
+
 function normalizeConfig(config) {
   const raw = config && typeof config === 'object' ? config : {};
   const settings = { ...DEFAULTS };
@@ -1108,9 +1141,9 @@ function createJira(ctx, settings) {
     /** 优先级顺序缓存 `{ ranks: Map, expires: number }`；见 priorityRanks()。 */
     priorityCache: null,
 
-    /** 站点地址（必填，装完要在面板「配置」里填）。baseUrl 不是 volatile，读启动期快照即可。 */
+    /** 站点地址（必填）：每次现读 volatile 值，配置页改完立刻生效。 */
     site() {
-      return String(settings.baseUrl || '').trim();
+      return baseUrlOf(settings);
     },
 
     /** 每个入口（工具 / 命令 / 路由 / 轮询）开工前同步一次语言。 */
@@ -1170,7 +1203,7 @@ function createJira(ctx, settings) {
         query.set(name, String(value));
       }
       const qs = query.toString();
-      const url = `${settings.baseUrl}${path}${qs ? `?${qs}` : ''}`;
+      const url = `${this.site()}${path}${qs ? `?${qs}` : ''}`;
 
       const auth = Buffer.from(`${this.email()}:${token}`, 'utf8').toString('base64');
       let response;
@@ -1185,7 +1218,7 @@ function createJira(ctx, settings) {
         // 这里把 cause 里的真实原因带出来，方便自查。
         if (signal?.aborted) throw error;
         const cause = error?.cause?.code ?? error?.cause?.message ?? error?.message ?? error;
-        throw new JiraError('network', t('err.network', { baseUrl: settings.baseUrl, path, cause }));
+        throw new JiraError('network', t('err.network', { baseUrl: this.site(), path, cause }));
       }
       const text = await response.text();
 
@@ -1212,7 +1245,7 @@ function createJira(ctx, settings) {
 
       let response;
       try {
-        response = await fetch(`${settings.baseUrl}${path}`, {
+        response = await fetch(`${this.site()}${path}`, {
           method: 'POST',
           headers: {
             Authorization: `Basic ${auth}`,
@@ -1225,7 +1258,7 @@ function createJira(ctx, settings) {
       } catch (error) {
         if (signal?.aborted) throw error;
         const cause = error?.cause?.code ?? error?.cause?.message ?? error?.message ?? error;
-        throw new JiraError('network', t('err.network', { baseUrl: settings.baseUrl, path, cause }));
+        throw new JiraError('network', t('err.network', { baseUrl: this.site(), path, cause }));
       }
 
       const text = await response.text();
@@ -2149,7 +2182,7 @@ function registerTransitionRoute(ctx, jira) {
  */
 function publicSettings(settings) {
   return {
-    baseUrl: settings.baseUrl,
+    baseUrl: baseUrlOf(settings),
     email: liveSetting(settings, 'email', '') || t('err.emailNotSet'),
     projectKey: settings.projectKey,
     boardId: settings.boardId,
@@ -2281,7 +2314,7 @@ async function resolveToken(ctx, settings) {
 async function verifyCredential(settings, token, signal, email) {
   const account = typeof email === 'string' && email ? email : liveSetting(settings, 'email', '');
   const auth = Buffer.from(`${account}:${token}`, 'utf8').toString('base64');
-  const response = await fetch(`${settings.baseUrl}/rest/api/3/myself`, {
+  const response = await fetch(`${baseUrlOf(settings)}/rest/api/3/myself`, {
     headers: { Authorization: `Basic ${auth}`, Accept: 'application/json' },
     signal,
   });
@@ -2434,6 +2467,10 @@ async function writeSettings(ctx, settings, patch) {
   // email 与令牌绑定，也声明成了 volatile，所以能从这里一起落盘。
   if (typeof patch?.email === 'string' && patch.email.trim()) {
     ops.push({ op: 'set', path: ['email'], value: patch.email.trim() });
+  }
+  // 站点地址（配置页里的可编辑输入框）：必须是完整的 http(s) URL，否则抛错、不写。
+  if (Object.prototype.hasOwnProperty.call(patch ?? {}, 'baseUrl')) {
+    ops.push({ op: 'set', path: ['baseUrl'], value: normalizeBaseUrl(patch.baseUrl) });
   }
   const language = String(unwrapValue(patch?.language) ?? '').trim().toLowerCase();
   if (language === 'auto' || language === 'zh' || language === 'en') {
@@ -3086,7 +3123,7 @@ async function fetchPlanIssue(jira, key, signal) {
     parentSummary: String(fields.parent?.fields?.summary ?? '').trim(),
     hasDescription: hasPlanDescription(fields.description),
     links: Array.isArray(fields.issuelinks) ? fields.issuelinks.length : 0,
-    url: `${jira.settings.baseUrl}/browse/${body?.key ?? key}`,
+    url: `${jira.site()}/browse/${body?.key ?? key}`,
   };
 }
 
@@ -3528,7 +3565,7 @@ function transitionTool(jira, settings) {
       return [
         t('transition.updated', { key }),
         t('transition.updatedLine', { from: info.current || '—', to: result.status, id: match.id, name: match.name }),
-        `- ${jira.settings.baseUrl}/browse/${key}`,
+        `- ${jira.site()}/browse/${key}`,
       ].join('\n');
     },
   };
@@ -3684,7 +3721,7 @@ function renderWorkList(issues, jql, scope, jira, limitHit) {
     t('list.header', { scope: scopeLabel(scope), count: issues.length }),
     '',
     t('list.meta', {
-      baseUrl: settings.baseUrl,
+      baseUrl: baseUrlOf(settings),
       project: projectSummary(issues, settings.projectKey),
       account: liveSetting(settings, 'email', '') || t('list.accountMissing'),
     }),
@@ -3981,7 +4018,7 @@ function buildItemJson(issue, jira, ranks) {
     sprintState: typeof sprint?.state === 'string' ? sprint.state : '',
     sprintStart: typeof sprint?.startDate === 'string' ? sprint.startDate.slice(0, 10) : '',
     sprintEnd: typeof sprint?.endDate === 'string' ? sprint.endDate.slice(0, 10) : '',
-    url: key ? `${jira.settings.baseUrl}/browse/${key}` : jira.settings.baseUrl,
+    url: key ? `${jira.site()}/browse/${key}` : jira.site(),
   };
 }
 
@@ -4027,7 +4064,7 @@ function renderIssue(issue, options) {
   if (typeof fields.updated === 'string') meta.push(t('issue.meta.updated', { value: fields.updated.replace('T', ' ').slice(0, 16) }));
 
   if (meta.length) lines.push('', meta.join('　·　'));
-  if (issue?.key) lines.push('', t('issue.link', { url: `${options.settings.baseUrl}/browse/${issue.key}` }));
+  if (issue?.key) lines.push('', t('issue.link', { url: `${baseUrlOf(options.settings)}/browse/${issue.key}` }));
 
   lines.push('', t('issue.descriptionHeader'), '', adfToText(fields.description).trim() || t('issue.noDescription'));
 
