@@ -38,7 +38,7 @@ Show **your** Jira work items — with their real workflow status — inside [De
 DSH installs plugins from an **installation spec** — anything `pnpm add` accepts (registry package name, git URL, tarball, absolute path). Pick one:
 
 ```bash
-# 1) from the npm registry (published since 0.14.0; pin a version with @0.16.0)
+# 1) from the npm registry (published since 0.14.0; pin a version with @0.16.5)
 plugin_manager install_bundle(target="dsh-jira-work-overview")
 
 # 2) straight from GitHub (no npm publishing needed)
@@ -56,7 +56,13 @@ Installing adds `dsh-jira-work-overview` to your profile's bundle list and inser
 
 ## First-run configuration
 
-The bundled `cordis.patch.yml` deliberately contains **no site-specific values**, so nothing of the author's Jira account is shipped. Open the panel, click **配置 / Configure** in the panel header, and fill in:
+The bundled `cordis.patch.yml` deliberately contains **no site-specific values**, so nothing of the author's Jira account is shipped.
+
+**Nothing configured yet? The panel body *is* the login form.** Site URL, account email and API token show up in the exact spot where a failure hint used to be — fill what is missing and press **Save and connect**. Fields that are already saved may stay empty (the plugin submits only what you changed), and the list loads as soon as Jira accepts the pair.
+
+<img src="docs/images/panel-connect.png" width="1040" alt="First run: the panel shows a 'Connect Jira' form with site URL, account email and API token fields plus 'Save and connect' and 'Configure' buttons">
+
+Everything else lives in the configure dialog — click **配置 / Configure** in the panel header and fill in:
 
 | Field | Example | Required |
 | --- | --- | --- |
@@ -243,7 +249,7 @@ Behind a corporate proxy on Windows, DSH needs the proxy env vars it was started
 
 ## Versions and upgrades
 
-The current version is **0.16.0** (2026-11-20). The changelog records 30 versions (from 0.1.0); GitHub carries **9 tags / releases** (0.13.0 → 0.16.0), and **0.13.4 was the first public release** — the earlier 0.1.0–0.12.0 exist only in `CHANGELOG.md` and the project notes, with no commit or tag behind them, so "an older version" means **0.13.0 or later**. Every release is described in [CHANGELOG.md](CHANGELOG.md).
+The current version is **0.16.5** (2026-11-24). The changelog records 39 versions (from 0.1.0); GitHub carries **14 tags / releases** (0.13.0 → 0.16.5), and **0.13.4 was the first public release** — the earlier 0.1.0–0.12.0 exist only in `CHANGELOG.md` and the project notes, with no commit or tag behind them, so "an older version" means **0.13.0 or later**. Every release is described in [CHANGELOG.md](CHANGELOG.md).
 
 ### Why people still install older versions
 
@@ -278,11 +284,12 @@ The current version is **0.16.0** (2026-11-20). The changelog records 30 version
 | 0.14.0 | 2026-11-19 | feature | highlight follows **Jira's own priority order**; **first npm release** |
 | 0.15.0 | 2026-11-19 | feature | transitions update **in place**, your own changes no longer notify you, typed failure hints |
 | 0.15.1 | 2026-11-19 | **fix** | the four `/api` routes were never registered in a real host (404) |
-| 0.16.4 | 2026-11-23 | **fix** | on a fresh profile, filling email + token + site URL and clicking only **Save & verify** left the URL unsaved, so the panel always said there was no site URL; the panel now also reloads automatically after a successful save |
-| 0.16.3 | 2026-11-23 | **fix** | the Jira site URL is now an editable field in the config page (placeholder = current URL, saved to the profile Cordis patch); the failure hint's **Configure** button matches **Save and verify** |
-| 0.16.2 | 2026-11-23 | **fix** | the workspace context menu's **Link Jira project…** could vanish for a whole page (client startup race); covered by a new offline suite |
-| 0.16.1 | 2026-11-22 | fix | Windows notifications and *Show in file manager*, the Linux editor picker, UNC patch paths; three-OS CI and the release preflight; a planning walkthrough in both READMEs |
 | 0.16.0 | 2026-11-20 | feature | **site-wide search**, **group by epic**, the **计划** (plan) button on every row |
+| 0.16.1 | 2026-11-22 | fix | Windows notifications and *Show in file manager*, the Linux editor picker, UNC patch paths; three-OS CI and the release preflight; a planning walkthrough in both READMEs |
+| 0.16.2 | 2026-11-23 | **fix** | the workspace context menu's **Link Jira project…** could vanish for a whole page (client startup race); covered by a new offline suite |
+| 0.16.3 | 2026-11-23 | **fix** | the Jira site URL is now an editable field in the config page (placeholder = current URL, saved to the profile Cordis patch); the failure hint's **Configure** button matches **Save and verify** |
+| 0.16.4 | 2026-11-23 | **fix** | on a fresh profile, filling email + token + site URL and clicking only **Save & verify** left the URL unsaved, so the panel always said there was no site URL; the panel now also reloads automatically after a successful save |
+| 0.16.5 | 2026-11-24 | feature | **nothing configured shows a form, not an error**: the panel body is the Connect Jira form (site URL / email / API token) in the old failure slot, saved fields can stay empty, and the list reloads once Jira accepts the pair |
 
 > 0.1.0–0.12.0 all happened on 2026-11-18; tags and GitHub Releases start at 0.13.0.
 > To install an older version: `plugin_manager install_bundle(target="github:EagleSoap/dsh-jira-work-overview#v0.13.2")`, or pin the npm version with `target="dsh-jira-work-overview@0.14.0"` (the earliest version on npm is 0.14.0).

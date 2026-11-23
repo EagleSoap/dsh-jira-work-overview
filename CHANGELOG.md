@@ -4,7 +4,7 @@ All notable changes to **dsh-jira-work-overview** are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The first 25 releases were built in a single day, so the dates are real but the cadence was not: each entry lists what changed, not how long it took.
 
-## [Unreleased]
+## [0.16.5] - 2026-11-24
 
 ### Added
 
@@ -13,6 +13,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
   点「保存并连接」会先拿 `/myself` 验一次再写凭据库 / 设置，成功后自动重拉列表，令牌输入框只给
   掩码提示、永远不回显。旁边保留「去配置」，直达条数 / 监视 / 通知 / 语言这些高级项。
   只有「配了但连不上」（401 / 网络 / 站点返回异常 / 凭据读不出）才继续走原来的失败提示 + 原始信息。
+
+- **README 补了「第一次用」的截图与小节**：图由 `test/dsh-jira-shot.mjs --only panel-connect` 生成
+  （`docs/images/panel-connect.png` / `panel-connect.zh.png`），不讲新行为，只把「第一次打开看到什么」画出来；
+  中英两份 README 都加了入口（英文在 `First-run configuration`，中文独立一节「第一次用：面板里直接填」）。
 
 ## [0.16.4] - 2026-11-23
 

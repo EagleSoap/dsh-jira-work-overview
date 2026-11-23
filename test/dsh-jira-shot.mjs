@@ -19,6 +19,7 @@
  *   panel-watch.png      实时监视横幅 + 某一行展开的状态流转下拉
  *   plan-flow.png        绑定工作区 → 点「计划」的四步图解（示意图，不是真截图）
  *   sidebar-entry.png    左侧栏入口 + 未读角标
+ *   panel-connect.png    第一次用（什么都没配）：失败位置就是「连接 Jira」表单
  *   zh 版本加 `.zh` 后缀
  */
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -572,6 +573,7 @@ const effects = [];
  * `options.search`  —— 搜索框里的关键词（非空时命令面收到 `--search=`，回搜索命中载荷）
  * `options.workspace` —— 当前会话所在的工作区 id（面板按它自动选项目 tab）
  * `options.plans`   —— 已绑定的计划对话 `{ ISSUE: sessionId }`（任务行「计划」标成 on + 多个「×」）
+ * `options.failCode` —— 让 `--json` 回 `ok:false` + `error.code`（面板据此渲染失败提示 / 连接表单）
  */
 async function loadClient(lang, options = {}) {
   hookStore.clear();
@@ -589,6 +591,7 @@ async function loadClient(lang, options = {}) {
   const payload = demoPayload(lang);
   const searchPayloadData = searchPayload(lang);
   const commandCalls = [];
+  const failCode = options.failCode ?? '';
   const plans = { sessions: { ...(options.plans ?? {}) } };
 
   const clientCtx = {
@@ -599,6 +602,11 @@ async function loadClient(lang, options = {}) {
           async execute(sessionId, line) {
             await new Promise((done) => setTimeout(done, 20));
             commandCalls.push(String(line));
+            // 失败载荷与真 host 同形：`--json` 不 throw，回 `ok:false` + `error:{code,message}`。
+            if (failCode) {
+              const fail = { ok: false, items: [], total: null, error: { code: failCode, message: 'Missing Jira credential: put JIRA_API_TOKEN into the DSH credential store.' } };
+              return { ok: true, value: { commandId: 'jira', result: { kind: 'success', text: JSON.stringify(fail) } } };
+            }
             // 带 `--search=` 的那次查询回搜索命中（与真 host 一样：同一份载荷形状，集合换了）。
             const searched = /--search=(.+)$/.exec(String(line));
             const data = searched && searched[1].trim() ? searchPayloadData : payload;
@@ -622,6 +630,10 @@ async function loadClient(lang, options = {}) {
       __DSH_TRANSPORT__: {
         async fetch(url, init = {}) {
           const path = String(url).split('?')[0];
+          // 连接表单进面板先 GET 一次已保存的连接信息；截图里是全新安装，三项都空。
+          if (path === '/api/jira-work-overview/credential') {
+            return { ok: true, status: 200, async json() { return { ok: true, configured: false, masked: '', settings: { baseUrl: '' }, email: '' }; } };
+          }
           if (path === '/api/jira-work-overview/transition') {
             const key = new URL(url, 'http://shot.invalid').searchParams.get('key') ?? '';
             const current = payload.items.find((row) => row.key === key)?.status ?? 'To Do';
@@ -956,6 +968,16 @@ for (const lang of LANGS) {
     measureRows('panel', panel, PANEL_W, PANEL_H);
     panel = renderPanel();
     shot(`panel${suffix}`, panelHtml('panel', panel), PANEL_W, PANEL_H);
+  }
+
+  /* --- 1b) 第一次用：面板 body 就是「连接 Jira」表单（没站点 / 邮箱 / 令牌） --- */
+  if (WANTED('panel-connect')) {
+    currentEntries = {};
+    transport.watchState.payload = CLEAN_WATCH;
+    await openPanel(lang, { failCode: 'no_credential' });
+    await settle(160);
+    const panel = renderPanel();
+    shot(`panel-connect${suffix}`, panelHtml('panel-connect', panel), PANEL_W, PANEL_H);
   }
 
   /* --- 2) 实时监视横幅 + 某一行的状态流转下拉 --- */
