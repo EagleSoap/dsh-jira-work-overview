@@ -277,6 +277,7 @@ The current version is **0.16.0** (2026-11-20). The changelog records 30 version
 | 0.14.0 | 2026-11-19 | feature | highlight follows **Jira's own priority order**; **first npm release** |
 | 0.15.0 | 2026-11-19 | feature | transitions update **in place**, your own changes no longer notify you, typed failure hints |
 | 0.15.1 | 2026-11-19 | **fix** | the four `/api` routes were never registered in a real host (404) |
+| 0.16.2 | 2026-11-23 | **fix** | the workspace context menu's **Link Jira project…** could vanish for a whole page (client startup race); covered by a new offline suite |
 | 0.16.1 | 2026-11-22 | fix | Windows notifications and *Show in file manager*, the Linux editor picker, UNC patch paths; three-OS CI and the release preflight; a planning walkthrough in both READMEs |
 | 0.16.0 | 2026-11-20 | feature | **site-wide search**, **group by epic**, the **计划** (plan) button on every row |
 
@@ -299,6 +300,7 @@ Every user-visible defect, newest first (implementation detail is in the matchin
 
 | Version | Symptom | Cause / fix |
 | --- | --- | --- |
+| 0.16.2 | The workspace right-click menu lost **Link Jira project…** (so there was no way to bind a project), while the panel itself kept working | Browser-side plugins are created concurrently, and this one only waits for `slots` / `remote`; `contextMenus` waits for `locale` / `shortcuts` too, so a single `ctx.get('contextMenus')` in `apply()` could see it missing and skip the registration for the whole page. It now registers through `ctx.inject(['contextMenus'], …)` once the service appears; an older host without `ctx.inject` falls back to the direct path |
 | 0.16.1 | On Windows, new assignments and status changes produced **no notification at all** | A Windows toast must be posted under a **registered** AUMID; an unregistered one makes `CreateToastNotifier()` throw `Element not found (0x80070490)`, which was swallowed. It now tries `DSH_NOTIFY_AUMID` → `DeepSeek Harness` → `com.deepseek.harness` → the built-in PowerShell AUMID in order; the script statements are joined with newlines (`{; try … }` is a PowerShell syntax error, so nothing ran) |
 | 0.16.1 | On Windows, *Show in file manager* opened Explorer but still reported a failure | `explorer.exe /select,` exits with code 1 even on success. That branch now tolerates a non-zero exit; only a process that never starts counts as a failure |
 | 0.16.1 | With the profile on a network share, the config file was treated as an unknown path | Absolute-path detection only accepted `/…` and `C:\…`. It now also accepts UNC paths (`\\server\share\…`) |

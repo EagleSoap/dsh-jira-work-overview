@@ -530,6 +530,7 @@ Zed（`zed`）、Sublime Text（`subl`）、gedit（`gedit`）——**找到可�
 | 0.14.0 | 2026-11-19 | 功能 | 高亮挂到 **Jira 自己的优先级名次**；**首次发布到 npm** |
 | 0.15.0 | 2026-11-19 | 功能 | 改状态**不再全量重拉**、自己改的状态不再通知自己、失败提示按类型 |
 | 0.15.1 | 2026-11-19 | **修复** | 四条 `/api` 路由在真宿主里没注册（404） |
+| 0.16.2 | 2026-11-23 | **修复** | 左栏工作区右键菜单的「关联 Jira 项目…」会整页消失（客户端启动竞态）；新增离线套件守住 |
 | 0.16.1 | 2026-11-22 | 修复 | Windows 通知与「在文件管理器中显示」、Linux 编辑器直选、UNC 路径；三平台 CI 与发版预检；README 补计划会话图解 |
 | 0.16.0 | 2026-11-20 | 功能 | **整站搜索**、**按 epic 分组**、任务行**「计划」**（plan 模式会话） |
 
@@ -553,6 +554,7 @@ plugin_manager install_bundle(target="dsh-jira-work-overview")  # 已装过则�
 
 | 版本 | 现象 | 原因 / 处理 |
 | --- | --- | --- |
+| 0.16.2 | 左栏工作区的右键菜单里「关联 Jira 项目…」整页消失，没法给工作区绑项目；面板本身正常 | 浏览器侧插件是**并发创建**的，本插件只等 `slots` / `remote`，而 `contextMenus` 还要等 `locale` / `shortcuts`：`apply()` 里只 `ctx.get('contextMenus')` 拿一次，没拿到就跳过注册，这一页就再也没有这条菜单。现在改用 `ctx.inject(['contextMenus'], …)` 等服务出现再注册；老基座没有 `ctx.inject` 时退回直接注册 |
 | 0.16.1 | Windows 上新任务 / 状态变化**一条通知都没有**（macOS 正常） | Windows 的 Toast 必须挂在一个**已注册的** AUMID 上，未注册时 `CreateToastNotifier()` 抛 `Element not found (0x80070490)`，而它被静默吞掉了。现在按 `DSH_NOTIFY_AUMID` → `DeepSeek Harness` → `com.deepseek.harness` → 系统自带的 PowerShell AUMID 依次试；脚本里的语句改用换行拼接（`{; try … }` 是 PowerShell 语法错误，整段都不执行） |
 | 0.16.1 | Windows 上「在文件管理器中显示」明明已打开，却报 `打开失败` | `explorer.exe /select,` 成功时也返回退出码 1，被当成了失败。现在这个分支允许非零退出码，只有进程根本起不来才算失败 |
 | 0.16.1 | profile 放在网络共享盘上时，配置文件被当成「路径未知」，打开 / 显示全都用不了 | 绝对路径判定只认 `/…` 与 `C:\…`。现在也认 UNC（`\\server\share\…`） |
