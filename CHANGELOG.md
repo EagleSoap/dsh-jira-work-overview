@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.16.2] - 2026-11-23
+
 ### Fixed
 
 - **左栏工作区的右键菜单里「关联 Jira 项目…」会整页消失（绑定选项没了）。** 浏览器侧的插件入口是
