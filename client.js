@@ -198,7 +198,7 @@ window.__ModuleLoader__.load({
         failDetail: '原始信息：{message}',
         // 没配站点 / 邮箱 / 令牌时，失败位置直接换成这张连接表单（三个字段都能留空沿用已保存值）。
         connectTitle: '连接 Jira',
-        connectHint: '填上 Jira 站点地址、账号邮箱和 API token 就能拉取任务列表；已经保存过的字段可以留空沿用。',
+        connectHint: '填上 Jira 服务地址、账号邮箱和 API token 就能拉取任务列表；已经保存过的字段可以留空沿用。',
         connectTokenLabel: 'API token',
         connectTokenPlaceholder: '粘贴 Jira API token',
         connectTokenKeep: '已保存 {masked}，留空沿用',
@@ -444,7 +444,7 @@ window.__ModuleLoader__.load({
         // Unconfigured site / email / token: the failure slot renders this connect form instead
         // (all three fields can be left empty to keep the saved value).
         connectTitle: 'Connect Jira',
-        connectHint: 'Enter your Jira site URL, account email and API token to load your work; leave a saved field empty to keep it.',
+        connectHint: 'Enter your Jira base URL, account email and API token to load your work; leave a saved field empty to keep it.',
         connectTokenLabel: 'API token',
         connectTokenPlaceholder: 'Paste a Jira API token',
         connectTokenKeep: 'Saved {masked} — leave empty to keep it',
