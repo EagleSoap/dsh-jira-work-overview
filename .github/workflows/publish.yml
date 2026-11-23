@@ -126,11 +126,22 @@ jobs:
             echo "::error::shasum mismatch — the registry is not serving the tarball we packed"
             exit 1
           fi
-          # dist-tag 只在包文档（不带版本号的那个 URL）里有，latest 指到新版本才算发布完成
-          PACKUMENT="$(curl -fsS "https://registry.npmjs.org/$PKG" || true)"
-          LATEST="$(node -e 'try { console.log(JSON.parse(process.argv[1])["dist-tags"].latest) } catch { console.log("<unreadable>") }' "$PACKUMENT")"
-          echo "dist-tags.latest=$LATEST"
+          # dist-tag 只在包文档（不带版本号的那个 URL）里有，latest 指到新版本才算发布完成。
+          # 包文档比单版本文档刷得晚：0.16.5 时版本已上线、tarball 已与本地一致，但同一秒读包文档
+          # 的 dist-tags.latest 还是上一版 —— 旧版这里只读一次就 exit 1，把一次完全正常的发布标红。
+          # 现在同样轮询（最多 2 分钟）：latest 追上来才算完成。
+          LATEST=""
+          for attempt in $(seq 1 24); do
+            PACKUMENT="$(curl -fsS "https://registry.npmjs.org/$PKG" || true)"
+            LATEST="$(node -e 'try { console.log(JSON.parse(process.argv[1])["dist-tags"].latest) } catch { console.log("") }' "$PACKUMENT")"
+            if [ "$LATEST" = "$VERSION" ]; then
+              echo "dist-tags.latest=$LATEST (attempt $attempt)"
+              break
+            fi
+            echo "attempt $attempt: dist-tags.latest=${LATEST:-<unreadable>}, waiting 5s"
+            sleep 5
+          done
           if [ "$LATEST" != "$VERSION" ]; then
-            echo "::error::dist-tags.latest is $LATEST, expected $VERSION"
+            echo "::error::dist-tags.latest is ${LATEST:-<unreadable>}, expected $VERSION"
             exit 1
           fi
