@@ -691,6 +691,45 @@ if (baseUrlInput()) {
   console.log('非法地址 → 被拒:', settingsWrites.length === beforeBad,
     '| 错误文案:', collect(credPage, (row) => classNameOf(row).includes('jmw-cred-msg') && classNameOf(row).includes('err')).map((row) => text(row).trim()).join(' | '));
 }
+// 站点地址与令牌一起提交：同一张表单里填的地址要跟着「保存并验证」一起落盘，
+// 否则用户只点那个按钮时地址根本没保存，列表还是 no_base_url。
+{
+  const beforeWrites = settingsWrites.length;
+  const beforeCalls = myselfCalls.length;
+  const response = await credentialFetch(CRED_PATH, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ token: GOOD, email: 'someone@example.com', baseUrl: 'https://saved-with-token.atlassian.net/' }),
+  });
+  const body = await response.json().catch(() => ({}));
+  const write = settingsWrites[settingsWrites.length - 1];
+  const baseOp = write?.ops?.find((op) => op.path[0] === 'baseUrl');
+  const probe = myselfCalls[myselfCalls.length - 1];
+  const okSave = body.ok === true && body.baseUrlSaved === true && body.baseUrl === 'https://saved-with-token.atlassian.net';
+  const okWrite = settingsWrites.length > beforeWrites && baseOp?.value === 'https://saved-with-token.atlassian.net';
+  const okProbe = myselfCalls.length > beforeCalls && String(probe?.url ?? '').startsWith('https://saved-with-token.atlassian.net/rest/api/3/myself');
+  console.log('\n令牌 + 站点地址一次保存: ok:', body.ok === true, '| baseUrlSaved:', body.baseUrlSaved, '| baseUrl:', body.baseUrl);
+  console.log('  profile patch 写入:', okWrite, '| /myself 用新地址验证:', okProbe, '(', probe?.url, ')');
+  if (!okSave || !okWrite || !okProbe) process.exitCode = 1;
+
+  const beforeBad = settingsWrites.length;
+  const bad = await credentialFetch(CRED_PATH, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ token: GOOD, email: 'someone@example.com', baseUrl: 'not a url' }),
+  });
+  const badBody = await bad.json().catch(() => ({}));
+  console.log('  非法站点地址一起提交 → 被拒:', badBody.ok === false, '| 未写入:', settingsWrites.length === beforeBad,
+    '| 文案:', badBody.error);
+  if (badBody.ok !== false || settingsWrites.length !== beforeBad) process.exitCode = 1;
+
+  // 还原：后面的用例还要用配置里的站点地址。
+  await settingsFetch(SETTINGS_PATH, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ baseUrl: env.JIRA_BASE_URL }),
+  });
+}
 // 界面语言：三个 chip（自动 / 中文 / English），点了立刻写进 profile 的 Cordis patch
 // 迷你 React 不保留 key，所以按「文本是三种语言名之一」来找（配置页里不会同时出现状态下拉的 chip）
 const LANG_LABELS = ['自动', '中文', 'English'];

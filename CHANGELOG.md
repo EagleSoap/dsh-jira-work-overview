@@ -4,6 +4,17 @@ All notable changes to **dsh-jira-work-overview** are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The first 25 releases were built in a single day, so the dates are real but the cadence was not: each entry lists what changed, not how long it took.
 
+## [Unreleased]
+
+### Fixed
+
+- **第一次配置时只点「保存并验证」，站点地址没跟着保存，列表一直是空的。** 全新安装（或换了 profile）
+  时 `baseUrl` 还没写过：用户在配置页把邮箱、令牌、站点地址一起填好、只点了「保存并验证」这条通道
+  当时只提交 `token` + `email`，地址留在输入框里没落盘，于是面板一直报「还没有配置 Jira 站点地址」。
+  现在令牌保存会带上输入框里的站点地址、先拿它做 `/myself` 验证再一起写进 profile（地址非法整条拒绝、
+  不写入）；配置保存成功后还会让面板自动重拉一次列表（以前配置完关掉弹窗，看到的仍是旧错误页，
+  得手动点「重试」）；profile 没有 settings 服务、只能本次运行生效时也会明确提示。
+
 ## [0.16.3] - 2026-11-23
 
 ### Added

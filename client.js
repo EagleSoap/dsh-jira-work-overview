@@ -267,6 +267,8 @@ window.__ModuleLoader__.load({
         credConfirmClear: '确认清除？',
         credSaved: '已保存到 DSH 凭据库（{key}），立即生效',
         credSavedEmail: '账号邮箱已更新为 {email}',
+        credSavedBaseUrl: '站点地址已更新为 {baseUrl}',
+        baseUrlSavedLocal: '站点地址已应用（{baseUrl}），但没能写进 profile 的 Cordis patch（{reason}），重启后会丢',
         credSavedOffline: '已保存到 DSH 凭据库（{key}）；这次没能验证成功（{message}）',
         credSavedAs: '已验证账号：{account}',
         credCleared: '已从凭据库删除 {key}',
@@ -501,6 +503,8 @@ window.__ModuleLoader__.load({
         credConfirmClear: 'Clear it?',
         credSaved: 'Saved to the DSH credential store ({key}); effective immediately',
         credSavedEmail: 'Account email updated to {email}',
+        credSavedBaseUrl: 'Site URL updated to {baseUrl}',
+        baseUrlSavedLocal: 'Site URL applied ({baseUrl}) but could not be written into this profile\'s Cordis patch ({reason}); it is lost after a restart',
         credSavedOffline: 'Saved to the DSH credential store ({key}); verification failed this time ({message})',
         credSavedAs: 'Verified account: {account}',
         credCleared: 'Removed {key} from the credential store',
@@ -3049,7 +3053,13 @@ window.__ModuleLoader__.load({
               onClick: () => setCredOpen(false),
             }, h(CloseGlyph)),
           ]),
-          h(CredentialSettings, { key: 'body', view: 'page' }),
+          // 保存成功就让面板重拉一次列表：否则配置完关掉弹窗，后面还是那张
+          // 「没有配置 / 加载失败」的旧错误页，用户以为没生效。
+          h(CredentialSettings, {
+            key: 'body',
+            view: 'page',
+            onChanged: () => { if (state.open) void load(snapshot.scope); },
+          }),
         ]))
         : null;
 
@@ -3212,34 +3222,45 @@ window.__ModuleLoader__.load({
 
       async function save() {
         // 令牌与邮箱是一对：有令牌就用新令牌，没令牌时用当前生效的那把（只改邮箱的场景）。
+        // 站点地址也一并带上：用户在同一张表单里刚填的地址不该要求他先单独点一次「保存地址」，
+        // 否则他只点「保存并验证」时地址根本没落盘，列表照样报 no_base_url。
         const token = state.input.trim();
         const email = state.email.trim();
-        if (!token && !emailChanged()) return;
+        const baseUrl = state.baseUrlDraft.trim();
+        if (!token && !emailChanged() && !baseUrl) return;
         setState((prev) => ({ ...prev, busy: 'save', message: '', error: '' }));
         try {
           const response = await watchFetch(CREDENTIAL_PATH, {
             method: 'POST',
             headers: { accept: 'application/json', 'content-type': 'application/json' },
-            body: JSON.stringify({ token, email }),
+            body: JSON.stringify(baseUrl ? { token, email, baseUrl } : { token, email }),
           });
           const payload = await response.json().catch(() => null);
           if (payload?.ok !== true) throw new Error(payload?.error || `HTTP ${response.status}`);
           const offline = payload.verification && payload.verification.ok === false;
           const account = payload.verification?.account ? `　${t('credSavedAs', { account: payload.verification.account })}` : '';
           const emailNote = payload.emailSaved ? `　${t('credSavedEmail', { email: payload.email ?? email })}` : '';
+          const baseUrlNote = payload.baseUrlSaved
+            ? `　${payload.baseUrlPersisted === false
+              ? t('baseUrlSavedLocal', { baseUrl: String(payload.baseUrl ?? baseUrl), reason: String(payload.baseUrlReason ?? '') })
+              : t('credSavedBaseUrl', { baseUrl: String(payload.baseUrl ?? baseUrl) })}`
+            : '';
           setState((prev) => ({
             ...prev,
             busy: '',
             input: '',
             email: String(payload.email ?? prev.email),
             emailTouched: false,
+            // 地址已经落盘：清空草稿，placeholder 变成新地址。
+            baseUrlDraft: payload.baseUrlSaved ? '' : prev.baseUrlDraft,
             status: payload,
             error: '',
             // 账号只跟着这次保存的消息显示；不要把验证结果留在 state 里，否则下一条消息也会挂上它。
             message: (offline
               ? t('credSavedOffline', { key: payload.credentialKey, message: payload.verification.message ?? '' })
-              : t('credSaved', { key: payload.credentialKey })) + emailNote + account,
+              : t('credSaved', { key: payload.credentialKey })) + emailNote + baseUrlNote + account,
           }));
+          props?.onChanged?.();
         } catch (error) {
           setState((prev) => ({ ...prev, busy: '', error: t('credSaveFailed', { message: String(error?.message ?? error) }) }));
         }
@@ -3271,12 +3292,15 @@ window.__ModuleLoader__.load({
             baseUrlBusy: false,
             baseUrlDraft: '',
             baseUrlError: '',
-            baseUrlMessage: t('baseUrlSaved', { baseUrl: String(payload?.applied?.baseUrl ?? value) }),
+            baseUrlMessage: payload?.persisted === false
+              ? t('baseUrlSavedLocal', { baseUrl: String(payload?.applied?.baseUrl ?? value), reason: String(payload?.reason ?? '') })
+              : t('baseUrlSaved', { baseUrl: String(payload?.applied?.baseUrl ?? value) }),
             // 保存成功顺带刷新一遍状态：placeholder 立刻显示新的生效地址。
             ...readWatch(payload, prev),
           }));
           baseUrlFlashTimer = setTimeout(() => setState((prev) => ({ ...prev, baseUrlMessage: '' })), 2600);
           if (typeof baseUrlFlashTimer?.unref === 'function') baseUrlFlashTimer.unref();
+          props?.onChanged?.();
           void refresh();
         } catch (error) {
           setState((prev) => ({ ...prev, baseUrlBusy: false, baseUrlError: t('baseUrlSaveFailed', { message: String(error?.message ?? error) }) }));
@@ -3468,6 +3492,7 @@ window.__ModuleLoader__.load({
           const payload = await response.json().catch(() => null);
           if (payload?.ok !== true) throw new Error(payload?.error || `HTTP ${response.status}`);
           setState((prev) => ({ ...prev, busy: '', status: payload, error: '', message: t('credCleared', { key: payload.credentialKey }) }));
+          props?.onChanged?.();
         } catch (error) {
           setState((prev) => ({ ...prev, busy: '', error: t('credClearFailed', { message: String(error?.message ?? error) }) }));
         }

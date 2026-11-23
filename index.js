@@ -2309,12 +2309,13 @@ async function resolveToken(ctx, settings) {
 
 /**
  * 拿候选「邮箱 + 令牌」试一次 /myself：能分清「这个组合不对」（401/403）与「网络不通」。
- * email 省略时用当前生效的邮箱。
+ * email / site 省略时用当前生效值；site 允许传「还没落盘的候选地址」，免得用户
+ * 在同一张表单里刚填的站点地址要先保存一次才能验证。
  */
-async function verifyCredential(settings, token, signal, email) {
+async function verifyCredential(settings, token, signal, email, site) {
   const account = typeof email === 'string' && email ? email : liveSetting(settings, 'email', '');
   const auth = Buffer.from(`${account}:${token}`, 'utf8').toString('base64');
-  const response = await fetch(`${baseUrlOf(settings)}/rest/api/3/myself`, {
+  const response = await fetch(`${site || baseUrlOf(settings)}/rest/api/3/myself`, {
     headers: { Authorization: `Basic ${auth}`, Accept: 'application/json' },
     signal,
   });
@@ -2377,9 +2378,21 @@ function registerCredentialRoute(ctx, jira, settings) {
           // 令牌与邮箱是一对：都从 payload 里取，缺的那一半用当前生效值。
           const token = typeof payload?.token === 'string' ? payload.token.trim() : '';
           const rawEmail = typeof payload?.email === 'string' ? payload.email.trim() : '';
+          const rawBaseUrl = typeof payload?.baseUrl === 'string' ? payload.baseUrl.trim() : '';
           const current = await resolveToken(ctx, settings);
           const currentEmail = String(liveSetting(settings, 'email', '') ?? '').trim();
           const nextEmail = rawEmail || currentEmail;
+          // 站点地址也能和令牌一起提交：同一张表单里刚填的地址不必先单独保存一次，
+          // 否则用户只点「保存并验证」时地址根本没落盘，列表照样是 no_base_url。
+          let nextBaseUrl = baseUrlOf(settings);
+          if (rawBaseUrl) {
+            try {
+              nextBaseUrl = normalizeBaseUrl(rawBaseUrl);
+            } catch (error) {
+              return jsonResponse({ ok: false, error: String(error?.message ?? error) }, 400);
+            }
+          }
+          if (!nextBaseUrl) return jsonResponse({ ok: false, error: t('err.noBaseUrl') }, 400);
 
           if (!nextEmail) return jsonResponse({ ok: false, error: t('err.needEmail') }, 400);
           if (rawEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail)) {
@@ -2393,7 +2406,7 @@ function registerCredentialRoute(ctx, jira, settings) {
           // 网络层失败照存但提示（同令牌单独保存时的策略）。
           let verification = { skipped: true, reason: t('verify.skipped') };
           try {
-            const probe = await verifyCredential(settings, candidate, request.signal, nextEmail);
+            const probe = await verifyCredential(settings, candidate, request.signal, nextEmail, nextBaseUrl);
             verification = probe;
             if (probe.ok === false && (probe.status === 401 || probe.status === 403)) {
               return jsonResponse({
@@ -2417,8 +2430,29 @@ function registerCredentialRoute(ctx, jira, settings) {
             await writeSettings(ctx, settings, { email: nextEmail });
             emailSaved = true;
           }
+          let baseUrlSaved = false;
+          let baseUrlPersisted = true;
+          let baseUrlReason;
+          if (rawBaseUrl) {
+            // 验证已经用的是这个地址；这里只负责落盘，失败要把原因回给界面。
+            const written = await writeSettings(ctx, settings, { baseUrl: nextBaseUrl });
+            baseUrlSaved = true;
+            baseUrlPersisted = written?.persisted !== false;
+            baseUrlReason = written?.reason;
+          }
           const status = await credentialStatus(ctx, settings);
-          return jsonResponse({ ok: true, saved: true, tokenSaved: Boolean(token), emailSaved, verification, ...status });
+          return jsonResponse({
+            ok: true,
+            saved: true,
+            tokenSaved: Boolean(token),
+            emailSaved,
+            baseUrlSaved,
+            baseUrlPersisted,
+            baseUrlReason,
+            baseUrl: baseUrlOf(settings),
+            verification,
+            ...status,
+          });
         } catch (error) {
           return jsonResponse({ ok: false, error: String(error?.message ?? error) }, 400);
         }
