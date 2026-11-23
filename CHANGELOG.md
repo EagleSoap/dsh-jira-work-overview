@@ -13,6 +13,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
   保存后立刻生效，不用重装插件。只接受完整的 `http(s)` 地址（自动去掉尾部斜杠），空值 / 其它协议直接
   拒绝并在页面上报错；「其余配置写在 cordis.patch.yml 里，这个页面只改令牌」的说明也同步改掉了。
 
+### Fixed
+
+- **没配令牌时失败提示里的「去配置」按钮看不清。** 它原来用 `.jmw-btn.primary` 的
+  `--dsw-alias-brand-primary` 当底色，浅色 / 深色主题下会变成白底白字；现在改成和配置页「保存并验证」
+  完全一致的 `.jmw-cred-btn primary` + 内联深底白字（`#4d6bfe`），并删掉了已无用的 `.jmw-btn.primary` 规则。
+
 ## [0.16.2] - 2026-11-23
 
 ### Fixed

@@ -1893,8 +1893,6 @@ window.__ModuleLoader__.load({
   background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06));border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.1));
   border-radius:var(--dsw-radius-sm,8px)}
 .jmw-btn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.1))}
-.jmw-btn.primary{color:#fff;background:var(--dsw-alias-brand-primary,#4d6bfe);border-color:transparent}
-.jmw-btn.primary:hover{background:color-mix(in srgb,var(--dsw-alias-brand-primary,#4d6bfe) 86%,#000)}
 .jmw-skel{height:13px;margin:12px 40px;border-radius:7px;
   background:linear-gradient(90deg,transparent,var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.08)),transparent);
   background-size:220px 100%;animation:jmw-pulse 1.1s ease-in-out infinite}
@@ -2718,7 +2716,10 @@ window.__ModuleLoader__.load({
           actions.push(h('button', {
             key: 'config',
             type: 'button',
-            className: 'jmw-btn primary',
+            // 和配置页里的「保存并验证」用同一套按钮样式（类 + 内联兜底色），
+            // 别再用 .jmw-btn.primary —— 它在浅色/深色主题下会跟着品牌色变成白底白字。
+            className: 'jmw-cred-btn primary',
+            style: BTN_PRIMARY,
             onClick: () => setCredOpen(true),
           }, t('failOpenConfig')));
         }

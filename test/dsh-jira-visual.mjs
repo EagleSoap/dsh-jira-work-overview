@@ -803,7 +803,9 @@ const failureNode = (name) => collect(panel, (row) => clsOf(row) === name)[0];
 const failTitle = () => text(failureNode('jmw-failure-title')).trim();
 const failHint = () => text(failureNode('jmw-failure-hint')).trim();
 const failDetails = () => collect(panel, (row) => clsOf(row) === 'jmw-failure-detail');
-const failButtons = () => collect(panel, (row) => clsOf(row).split(' ')[0] === 'jmw-btn').map((row) => text(row).trim());
+// 失败态的按钮既可能是 .jmw-btn（重试），也可能是 .jmw-cred-btn（去配置，和配置页「保存并验证」同款）。
+const isActionBtn = (row) => row.type === 'button' && /^jmw-(cred-)?btn(\s|$)/.test(clsOf(row));
+const failButtons = () => collect(panel, isActionBtn).map((row) => text(row).trim());
 const refreshBtn = () => collect(panel, (row) => row.type === 'button' && row.props?.['aria-label'] === '刷新')[0];
 
 activeFailure.current = { code: 'no_credential', message: 'Missing Jira credential: put JIRA_API_TOKEN into the DSH credential store…' };
@@ -820,7 +822,13 @@ check(
   'I 无令牌 → 提示文字 + 去配置 / 重试，且不显示原始报错',
   `${failTitle()} / ${failButtons().join(',')}`,
 );
-const openConfig = collect(panel, (row) => clsOf(row).split(' ')[0] === 'jmw-btn' && text(row).trim() === '去配置')[0];
+const openConfig = collect(panel, (row) => isActionBtn(row) && text(row).trim() === '去配置')[0];
+check(
+  /\bprimary\b/.test(clsOf(openConfig)) && openConfig?.props?.style?.background === '#4d6bfe'
+  && openConfig?.props?.style?.color === '#ffffff',
+  'I 「去配置」用和「保存并验证」一致的按钮样式（深底白字 + primary 类）',
+  `class=${clsOf(openConfig)} style=${JSON.stringify(openConfig?.props?.style)}`,
+);
 openConfig.props.onClick();
 panel = renderPanel();
 check(
@@ -842,7 +850,7 @@ check(
   'I 401 → 「邮箱 / 令牌不被接受」+ 原始信息收在详情里',
   failTitle(),
 );
-const retryBtn = collect(panel, (row) => clsOf(row).split(' ')[0] === 'jmw-btn' && text(row).trim() === '重试')[0];
+const retryBtn = collect(panel, (row) => isActionBtn(row) && text(row).trim() === '重试')[0];
 activeFailure.current = null;
 retryBtn.props.onClick();
 await settle();
