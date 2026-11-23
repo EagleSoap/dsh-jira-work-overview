@@ -183,6 +183,9 @@ Object.defineProperty(globalThis, 'window', {
     __DSH_TRANSPORT__: {
       async fetch(url, init) {
         const method = String(init?.method ?? 'GET').toUpperCase();
+        if (String(url).split('?')[0] === '/api/jira-work-overview/credential') {
+          return credentialFetch(String(url), init ?? {});
+        }
         if (String(url).split('?')[0] === '/api/jira-work-overview/transition') {
           return transitionFetch(String(url), init ?? {});
         }
@@ -228,6 +231,41 @@ async function transitionFetch(url, init) {
     return OK({ ok: true, key: body.key, status: row?.to ?? '', category: row?.category ?? '' });
   }
   return OK({ ok: true, key, current: transitionState.current, currentCategory: 'new', transitions: TRANSITIONS });
+}
+
+/* --------------------------------------- 连接表单的 credential 通道 stub ----
+   真校验（打 /myself、401 拒绝、写凭据库）在 dsh-jira-credential 套件里跑；这里只关心面板：
+   表单回填已保存值、只提交改过的字段、保存成功后回到列表。 */
+const credentialState = { configured: false, baseUrl: '', email: '', masked: '', token: '', posts: [] };
+async function credentialFetch(url, init) {
+  const method = String(init.method ?? 'GET').toUpperCase();
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  if (method === 'POST') {
+    const body = init.body ? JSON.parse(init.body) : {};
+    credentialState.posts.push(body);
+    if (body.baseUrl !== undefined) credentialState.baseUrl = body.baseUrl;
+    if (body.email !== undefined) credentialState.email = body.email;
+    if (body.token) {
+      credentialState.token = body.token;
+      credentialState.configured = true;
+    }
+    return OK({
+      ok: true,
+      saved: true,
+      configured: credentialState.configured,
+      masked: 'ATATT…F000',
+      settings: { baseUrl: credentialState.baseUrl },
+      email: credentialState.email,
+      verification: { ok: true, account: '张三' },
+    });
+  }
+  return OK({
+    ok: true,
+    configured: credentialState.configured,
+    masked: credentialState.masked,
+    settings: { baseUrl: credentialState.baseUrl },
+    email: credentialState.email,
+  });
 }
 
 
@@ -795,59 +833,135 @@ check(
 activeFixture.current = FIXTURE;
 await pickStatus('全部状态');
 
-/* ---------------- I：可分类的失败 → 提示文字（不是原始报错） ----------------
-   host 在 --json 失败时回 ok:false + error.code；面板按 code 选文案，「去配置」直达令牌弹窗，
-   原始 message 只在 detail 类里以小字附上（无令牌这类「一句话能解决」的不该甩一坨报错）。 */
+/* ---------------- I：没配置时 → 失败位置直接换成「连接 Jira」表单 ----------------
+   host 在 --json 失败时回 ok:false + error.code。no_base_url / no_email / no_credential
+   都是「还没配好」：面板要在同一块位置渲染登录表单（站点 + 邮箱 + 令牌），填完保存就拉列表；
+   其它 code（auth / network…）仍走「提示 + 去配置 / 重试」。 */
 const clsOf = (row) => String(row.props?.className ?? '');
-const failureNode = (name) => collect(panel, (row) => clsOf(row) === name)[0];
-const failTitle = () => text(failureNode('jmw-failure-title')).trim();
-const failHint = () => text(failureNode('jmw-failure-hint')).trim();
+const nodeOf = (name) => collect(panel, (row) => clsOf(row) === name)[0];
+const failTitle = () => text(nodeOf('jmw-failure-title')).trim();
+const failHint = () => text(nodeOf('jmw-failure-hint')).trim();
 const failDetails = () => collect(panel, (row) => clsOf(row) === 'jmw-failure-detail');
-// 失败态的按钮既可能是 .jmw-btn（重试），也可能是 .jmw-cred-btn（去配置，和配置页「保存并验证」同款）。
+const connectTitle = () => text(nodeOf('jmw-connect-title')).trim();
+const connectHint = () => text(nodeOf('jmw-connect-hint')).trim();
+const connectInput = (field) => collect(panel, (row) => row.type === 'input' && row.props?.id === `jmw-connect-${field}`)[0];
 const isActionBtn = (row) => row.type === 'button' && /^jmw-(cred-)?btn(\s|$)/.test(clsOf(row));
-const failButtons = () => collect(panel, isActionBtn).map((row) => text(row).trim());
+const buttonOf = (label) => collect(panel, (row) => isActionBtn(row) && text(row).trim() === label)[0];
 const refreshBtn = () => collect(panel, (row) => row.type === 'button' && row.props?.['aria-label'] === '刷新')[0];
+// 迷你 React 不模拟卸载：新的失败场景要清掉上个表单的 hook 状态（真 React 由 key / 位置决定）。
+const resetConnectForm = () => hookStore.delete('ConnectForm');
+const flush = async (ms = 40) => { await new Promise((resolve) => setTimeout(resolve, ms)); };
 
+/* 场景 1：只缺令牌（站点 / 邮箱已保存）→ 回填这两项，令牌空着不给提交。 */
 activeFailure.current = { code: 'no_credential', message: 'Missing Jira credential: put JIRA_API_TOKEN into the DSH credential store…' };
+credentialState.configured = false;
+credentialState.baseUrl = 'https://example.atlassian.net';
+credentialState.email = 'dev@example.com';
+resetConnectForm();
 refreshBtn().props.onClick();
 await settle();
 panel = renderPanel();
-console.log('\nI 没配令牌：标题 =', JSON.stringify(failTitle()), '| 提示 =', JSON.stringify(failHint()), '| 按钮 =', JSON.stringify(failButtons()), '| 原始报错可见 =', failDetails().length);
+await flush();
+panel = renderPanel();
+console.log('\nI 没配令牌：标题 =', JSON.stringify(connectTitle()), '| 提示 =', JSON.stringify(connectHint()), '| 失败提示可见 =', failTitle() !== '');
 check(
-  failTitle() === '还没有配置 Jira 令牌'
-  && failHint().includes('Jira API token')
-  && failButtons().includes('去配置')
-  && failButtons().includes('重试')
-  && failDetails().length === 0,
-  'I 无令牌 → 提示文字 + 去配置 / 重试，且不显示原始报错',
-  `${failTitle()} / ${failButtons().join(',')}`,
+  connectTitle() === '连接 Jira'
+  && connectHint().includes('API token')
+  && failTitle() === '' && failHint() === '' && failDetails().length === 0
+  && collect(panel, (row) => clsOf(row) === 'jmw-state err jmw-failure').length === 0,
+  'I 没配令牌 → 失败位置换成「连接 Jira」表单（不再显示失败标题 / 原始报错）',
+  `${connectTitle()} / failure=${failTitle()}`,
 );
-const openConfig = collect(panel, (row) => isActionBtn(row) && text(row).trim() === '去配置')[0];
 check(
-  /\bprimary\b/.test(clsOf(openConfig)) && openConfig?.props?.style?.background === '#4d6bfe'
-  && openConfig?.props?.style?.color === '#ffffff',
-  'I 「去配置」用和「保存并验证」一致的按钮样式（深底白字 + primary 类）',
-  `class=${clsOf(openConfig)} style=${JSON.stringify(openConfig?.props?.style)}`,
+  Boolean(connectInput('base-url')) && Boolean(connectInput('email')) && Boolean(connectInput('token')),
+  'I 表单有站点地址 / 邮箱 / API token 三个输入框',
+  ['base-url', 'email', 'token'].map((field) => `${field}=${Boolean(connectInput(field))}`).join(' '),
 );
-openConfig.props.onClick();
+check(
+  connectInput('base-url').props.value === 'https://example.atlassian.net'
+  && connectInput('email').props.value === 'dev@example.com'
+  && connectInput('token').props.value === '',
+  'I 只缺令牌时回填已保存的站点与邮箱（令牌永远是空输入框）',
+  `${connectInput('base-url').props.value} / ${connectInput('email').props.value}`,
+);
+check(
+  connectInput('token').props.placeholder === '粘贴 Jira API token' && buttonOf('保存并连接')?.props.disabled === true,
+  'I 令牌为空时「保存并连接」不可点（缺什么填什么）',
+  `placeholder=${JSON.stringify(connectInput('token').props.placeholder)} disabled=${buttonOf('保存并连接')?.props.disabled}`,
+);
+check(
+  /\bprimary\b/.test(clsOf(buttonOf('保存并连接'))) && buttonOf('保存并连接')?.props?.style?.background === '#4d6bfe',
+  'I 「保存并连接」用和配置页「保存并验证」一致的深底白字样式',
+  `class=${clsOf(buttonOf('保存并连接'))}`,
+);
+
+/* 去配置仍然在（轮询 / 通知 / 语言这些高级项），点开还是令牌弹窗。 */
+buttonOf('去配置').props.onClick();
 panel = renderPanel();
 check(
   collect(panel, (row) => clsOf(row) === 'jmw-credmodal').length === 1,
-  'I 「去配置」直接打开令牌弹窗',
+  'I 表单里的「去配置」照旧直达令牌弹窗',
   `jmw-credmodal=${collect(panel, (row) => clsOf(row) === 'jmw-credmodal').length}`,
 );
 keyHandlers[keyHandlers.length - 1]({ key: 'Escape', preventDefault() {} });
 panel = renderPanel();
 
-/* detail 类（站点 / 网络）：提示之外要能看见原始 message，否则用户没法判断到底哪儿错了。 */
+/* 场景 2：填令牌 → 保存并连接 → 只提交改过的字段，列表立刻回来。 */
+connectInput('token').props.onInput({ target: { value: 'ATATT3xFfGF0TOKENTOKENTOKEN' } });
+panel = renderPanel();
+check(buttonOf('保存并连接')?.props.disabled === false, 'I 填上令牌后按钮可点（已保存的站点 / 邮箱不必重填）');
+activeFailure.current = null;
+const postsBefore = credentialState.posts.length;
+const commandsBeforeConnect = calls.length;
+buttonOf('保存并连接').props.onClick();
+// 保存是异步的（POST → 成功 → 才触发列表重拉）：先等 POST 回来，再等命令跑完。
+await flush(80);
+await settle();
+panel = renderPanel();
+const posted = credentialState.posts[postsBefore];
+console.log('I 提交的连接信息:', JSON.stringify({ ...posted, token: posted?.token ? `${posted.token.slice(0, 6)}…` : undefined }));
+check(
+  posted?.token === 'ATATT3xFfGF0TOKENTOKENTOKEN' && posted?.email === undefined && posted?.baseUrl === undefined,
+  'I POST 只带改过的令牌（已保存的站点 / 邮箱留空沿用）',
+  JSON.stringify({ ...posted, token: posted?.token ? '***' : undefined }),
+);
+check(
+  calls.length > commandsBeforeConnect && rows(panel).length === FIXTURE.items.length && !connectTitle(),
+  'I 保存成功后自动重拉列表（表单消失、任务行回来）',
+  `rows=${rows(panel).length} commands=${calls.length - commandsBeforeConnect}`,
+);
+
+/* 场景 3：首次什么都还没配（no_base_url / no_email）→ 同样是表单，不是失败提示。 */
+credentialState.configured = false;
+credentialState.baseUrl = '';
+credentialState.email = '';
+for (const code of ['no_base_url', 'no_email']) {
+  activeFailure.current = { code, message: `setup needed: ${code}` };
+  resetConnectForm();
+  refreshBtn().props.onClick();
+  await settle();
+  panel = renderPanel();
+  await flush();
+  panel = renderPanel();
+  check(
+    connectTitle() === '连接 Jira' && failTitle() === '' && failDetails().length === 0
+    && connectInput('base-url').props.value === '' && connectInput('email').props.value === '',
+    `I ${code} → 同一张连接表单（站点 / 邮箱都空着，等用户填）`,
+    `${code}: ${connectTitle()} / failure=${failTitle()}`,
+  );
+}
+
+/* 场景 4：凭据存在但被拒（auth）→ 仍是失败提示 + 详情；「重试」能回到列表。 */
 activeFailure.current = { code: 'auth', message: 'Jira 401 Unauthorized (/rest/api/3/search/jql)：Check your email and API token' };
+resetConnectForm();
 refreshBtn().props.onClick();
 await settle();
 panel = renderPanel();
 console.log('I 401：标题 =', JSON.stringify(failTitle()), '| 详情小字 =', JSON.stringify(text(failDetails()[0]).trim().slice(0, 40)));
 check(
-  failTitle() === 'Jira 不认这组邮箱 / 令牌' && failDetails().length === 1 && text(failDetails()[0]).includes('401'),
-  'I 401 → 「邮箱 / 令牌不被接受」+ 原始信息收在详情里',
+  failTitle() === 'Jira 不认这组邮箱 / 令牌' && failDetails().length === 1 && text(failDetails()[0]).includes('401')
+  && !connectTitle(),
+  'I 401 → 不换成表单（凭据已配，是被拒）；原始信息收在详情里',
   failTitle(),
 );
 const retryBtn = collect(panel, (row) => isActionBtn(row) && text(row).trim() === '重试')[0];

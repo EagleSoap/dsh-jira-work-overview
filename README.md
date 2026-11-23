@@ -21,6 +21,7 @@ Show **your** Jira work items — with their real workflow status — inside [De
 - **Live watch** — the host polls "assigned to me and not done" in the background; new assignments / status changes show a **system notification**, an **unread badge** on the sidebar entry, and a "what changed" banner with *mark as read*. The panel refreshes itself when a change arrives.
 - **Three agent tools** — `jira_my_work`, `jira_issue`, `jira_transition` (preview by default, writes only with `apply: true`).
 - **One slash command** — `/jira [--json] [--limit=<n>|0] [--lang=<tag>] [--search=<text>] [open|sprint|all | <issue key> | <JQL>]`; it renders in the command surface, so it costs no model tokens.
+- **First run is the form** — with no Jira site, email or token the panel body *is* a **Connect Jira** form (site URL, email, API token) in the exact spot the failure message used to take; fill what is missing and press **Save and connect**. Already-saved fields can be left empty, and **Configure** is still one click away for fetch size, watch, notifications and language.
 - **Configure dialog** — Jira site / email / API token (token goes to the DSH credential store), fetch size, watch switch + interval, notification switch, UI language, and one-click **open `cordis.patch.yml`** (default app / system "open with" chooser / detected editors / custom app).
 - **Bilingual UI** — follows the DSH language setting (`设置 → 通用 → 语言`), live; Jira-returned text (summaries, status names, labels) is always shown verbatim.
 
@@ -234,7 +235,7 @@ The plugin's own copy follows the DSH language setting; English and Chinese ship
 | configure dialog says "Reading the token state failed: HTTP 404" | the plugin's `/api` routes were not registered (the host loaded the plugin before its connection service existed) — reload the plugin; a fixed build registers them once the service is up |
 | footer says "live watch disconnected" | transient transport error; it retries with backoff |
 | token rejected when saving | the email + token pair is wrong, or the token has no Jira access |
-| panel says "No Jira token yet" | nothing is configured yet: click **Configure** and paste an API token (or set `JIRA_API_TOKEN`) |
+| panel body is a **Connect Jira** form | nothing is configured yet: fill site URL / email / API token and press **Save and connect** (a saved field can stay empty); the form sits where the failure hint used to be, and the token still goes straight to the DSH credential store |
 | panel says "Jira rejected this email / token pair" | 401/403 from Jira: regenerate the token; the raw response is under the hint |
 | panel says "Could not read the stored token" | the credential store returned an error rather than a value: save the token again from **Configure** |
 
@@ -339,7 +340,7 @@ Every user-visible defect, newest first (implementation detail is in the matchin
 
 1. **No sidebar entry**, or `plugin_manager` says `active` while the UI is empty → upgrade to **0.13.2 or later** and refresh.
 2. The configure dialog reports **HTTP 404** / the badge never updates → upgrade to **0.15.1 or later**.
-3. The panel says there is no token / the token was rejected / it cannot read it → use **Configure** in the hint (or at the right of the panel title); you never have to edit the profile file.
+3. **Nothing is configured yet** → the panel body is a **Connect Jira** form (site URL, email, API token); fill what is missing and press **Save and connect**. A rejected token / unreadable credential keeps the failure hint: use **Configure** there (or at the right of the panel title); you never have to edit the profile file.
 4. A raw error from `/jira` in text mode is **on purpose** — the command surface should show the real reason; the panel uses the typed `--json` hints instead.
 
 ## Security and privacy

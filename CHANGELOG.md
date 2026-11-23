@@ -4,6 +4,16 @@ All notable changes to **dsh-jira-work-overview** are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The first 25 releases were built in a single day, so the dates are real but the cadence was not: each entry lists what changed, not how long it took.
 
+## [Unreleased]
+
+### Added
+
+- **第一次用不再只看到一句失败。** 没配站点地址 / 邮箱 / 令牌时，面板在**原来显示登录失败的位置**
+  直接渲染「连接 Jira」表单（站点地址 + 邮箱 + API token）：缺什么填什么，已保存的字段留空沿用；
+  点「保存并连接」会先拿 `/myself` 验一次再写凭据库 / 设置，成功后自动重拉列表，令牌输入框只给
+  掩码提示、永远不回显。旁边保留「去配置」，直达条数 / 监视 / 通知 / 语言这些高级项。
+  只有「配了但连不上」（401 / 网络 / 站点返回异常 / 凭据读不出）才继续走原来的失败提示 + 原始信息。
+
 ## [0.16.4] - 2026-11-23
 
 ### Fixed

@@ -93,6 +93,13 @@ window.__ModuleLoader__.load({
       return Object.prototype.hasOwnProperty.call(FAILURES, code) ? FAILURES[code] : FAILURES.unknown;
     }
 
+    /**
+     * 这几个 code 说的是「还没配好」，不是「配了但连不上」：面板把同一块位置直接换成
+     * 「连接 Jira」表单（站点地址 + 邮箱 + 令牌），用户当场填完就拉列表，不用先看一句失败提示
+     * 再自己去找配置入口。其它 code（auth / network / http…）仍走 FAILURES 的提示。
+     */
+    const CONNECT_CODES = new Set(['no_base_url', 'no_email', 'no_credential']);
+
     /** 条数语义的客户端归一化（与 host 侧 index.js 的 normalizeLimit 同步）：
      *  **0 = 不限制**，正数 clamp 到 10–5000，其它（非法 / 负数）回落到 fallback。 */
     function normalizeLimit(value, fallback = LIMIT_DEFAULT) {
@@ -189,6 +196,15 @@ window.__ModuleLoader__.load({
         failUnknownHint: '这次失败没有可归类的类型，原始信息见下方。',
         failOpenConfig: '去配置',
         failDetail: '原始信息：{message}',
+        // 没配站点 / 邮箱 / 令牌时，失败位置直接换成这张连接表单（三个字段都能留空沿用已保存值）。
+        connectTitle: '连接 Jira',
+        connectHint: '填上 Jira 站点地址、账号邮箱和 API token 就能拉取任务列表；已经保存过的字段可以留空沿用。',
+        connectTokenLabel: 'API token',
+        connectTokenPlaceholder: '粘贴 Jira API token',
+        connectTokenKeep: '已保存 {masked}，留空沿用',
+        connectSubmit: '保存并连接',
+        connectSaving: '连接中…',
+        connectFailed: '连接失败：{message}',
         untitled: '（无摘要）',
         parent: '父 {key}',
         watch: '实时监视中',
@@ -425,6 +441,16 @@ window.__ModuleLoader__.load({
         failUnknownHint: 'This failure has no known type; the raw message is below.',
         failOpenConfig: 'Configure',
         failDetail: 'Raw message: {message}',
+        // Unconfigured site / email / token: the failure slot renders this connect form instead
+        // (all three fields can be left empty to keep the saved value).
+        connectTitle: 'Connect Jira',
+        connectHint: 'Enter your Jira site URL, account email and API token to load your work; leave a saved field empty to keep it.',
+        connectTokenLabel: 'API token',
+        connectTokenPlaceholder: 'Paste a Jira API token',
+        connectTokenKeep: 'Saved {masked} — leave empty to keep it',
+        connectSubmit: 'Save and connect',
+        connectSaving: 'Connecting…',
+        connectFailed: 'Connection failed: {message}',
         untitled: '(no summary)',
         parent: 'parent {key}',
         watch: 'Live watch on',
@@ -1893,6 +1919,13 @@ window.__ModuleLoader__.load({
 .jmw-failure-actions{display:flex;justify-content:center;gap:8px}
 .jmw-failure-detail{max-width:360px;margin:14px auto 0;font-size:11px;line-height:1.5;
   color:var(--dsw-alias-label-tertiary,#8a8f99);white-space:pre-wrap;word-break:break-word}
+/* 还没配置时的内联「连接 Jira」表单：占的正是原来失败提示的位置，左对齐、字段竖排。 */
+.jmw-connect{max-width:420px;margin:0 auto;padding:26px 18px;text-align:left}
+.jmw-connect-title{font-size:13px;font-weight:600;color:var(--dsw-alias-label-primary,#1b1d22);margin-bottom:4px}
+.jmw-connect-hint{margin:0 0 12px;font-size:11.5px;line-height:1.6;color:var(--dsw-alias-label-secondary,#5c6270)}
+.jmw-connect-form{gap:4px}
+.jmw-connect-actions{justify-content:flex-start}
+.jmw-connect-note{margin-top:10px;font-size:11px;line-height:1.6;color:var(--dsw-alias-label-tertiary,#8a90a0)}
 .jmw-btn{padding:5px 14px;font:inherit;font-size:12px;color:var(--dsw-alias-label-primary,#1b1d22);cursor:pointer;
   background:var(--dsw-alias-interactive-bg-hover,rgba(38,49,72,.06));border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.1));
   border-radius:var(--dsw-radius-sm,8px)}
@@ -2512,6 +2545,165 @@ window.__ModuleLoader__.load({
       return String(value).replace(/["\\\]]/g, (ch) => `\\${ch}`);
     }
 
+    /* ------------------------------------------------- 未配置时的内联连接表单 */
+    //
+    // 第一次用时（没站点 / 没邮箱 / 没令牌），host 把失败按 code 分类送回来。这几种「还没配」
+    // 不该只给一句失败提示：面板在**原来显示失败的位置**直接渲染这张表单，填完就拉列表。
+    // 三个字段都能留空沿用已保存值，提交走配置页同一个 /credential 路由 —— host 会先拿
+    // 邮箱 + 令牌打一次 /myself，通过了才写凭据库 / 设置（401/403 直接拒绝并把原因回给这里）。
+    function ConnectForm(props) {
+      const [form, setForm] = React.useState({
+        // 已保存的连接信息（GET /credential）：用来回填 + 判断哪一项还缺。
+        origin: null,
+        baseUrl: '',
+        email: '',
+        token: '',
+        busy: false,
+        error: '',
+      });
+
+      // 进面板先读一次已保存的连接信息：只缺令牌时，用户只需要粘贴令牌再点保存。
+      React.useEffect(() => {
+        let alive = true;
+        (async () => {
+          try {
+            const response = await watchFetch(CREDENTIAL_PATH, { method: 'GET', headers: { accept: 'application/json' } });
+            const payload = await response.json().catch(() => null);
+            if (!alive) return;
+            if (payload?.ok !== true) return;
+            const baseUrl = String(payload?.settings?.baseUrl ?? '');
+            const email = String(payload?.email ?? '');
+            setForm((prev) => ({
+              ...prev,
+              origin: { baseUrl, email, configured: payload?.configured === true, masked: String(payload?.masked ?? '') },
+              // 状态读回来得比首屏慢：用户已经手动改过的字段不回填。
+              baseUrl: prev.baseUrl || baseUrl,
+              email: prev.email || email,
+            }));
+          } catch {
+            // 读不到状态不影响手动填写（提交时 host 会给出真正的错误）。
+          }
+        })();
+        return () => { alive = false; };
+      }, []);
+
+      const baseUrl = form.baseUrl.trim();
+      const email = form.email.trim();
+      const token = form.token.trim();
+      const origin = form.origin;
+      // 已保存过的字段不必再填；提交时只送改过的值，空的让 host 用当前值。
+      const needBaseUrl = !origin || !origin.baseUrl;
+      const needEmail = !origin || !origin.email;
+      const needToken = !origin || !origin.configured;
+      const canSubmit = !form.busy
+        && (!needBaseUrl || baseUrl !== '')
+        && (!needEmail || email !== '')
+        && (!needToken || token !== '');
+
+      const update = (field, value) => setForm((prev) => ({ ...prev, [field]: value, error: '' }));
+      const onEnter = (event) => { if (event?.key === 'Enter') void submit(); };
+
+      async function submit() {
+        if (!canSubmit) return;
+        const body = {};
+        if (!origin || baseUrl !== origin.baseUrl) body.baseUrl = baseUrl;
+        if (!origin || email !== origin.email) body.email = email;
+        if (token) body.token = token;
+        setForm((prev) => ({ ...prev, busy: true, error: '' }));
+        try {
+          const response = await watchFetch(CREDENTIAL_PATH, {
+            method: 'POST',
+            headers: { accept: 'application/json', 'content-type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          const payload = await response.json().catch(() => null);
+          // host 把「邮箱 / 令牌不被接受」也回成 ok:false + error：原样显示在表单下面。
+          if (payload?.ok !== true) throw new Error(payload?.error || `HTTP ${response.status}`);
+          setForm((prev) => ({ ...prev, busy: false, token: '' }));
+          // 保存成功 → 回到列表加载；新凭据立刻生效，不用再点「重试」。
+          props?.onConnected?.();
+        } catch (error) {
+          setForm((prev) => ({
+            ...prev,
+            busy: false,
+            error: t('connectFailed', { message: String(error?.message ?? error) }),
+          }));
+        }
+      }
+
+      return h('div', { className: 'jmw-state jmw-connect' }, [
+        h('div', { key: 'title', className: 'jmw-connect-title' }, t('connectTitle')),
+        h('div', { key: 'hint', className: 'jmw-connect-hint' }, t('connectHint')),
+        h('div', { key: 'form', className: 'jmw-cred-form jmw-connect-form' }, [
+          h('label', { key: 'bu-label', className: 'jmw-cred-label', htmlFor: 'jmw-connect-base-url' }, t('fBaseUrl')),
+          h('input', {
+            key: 'bu-input',
+            id: 'jmw-connect-base-url',
+            className: 'jmw-cred-input',
+            type: 'url',
+            inputMode: 'url',
+            autoComplete: 'off',
+            spellCheck: false,
+            placeholder: t('baseUrlPlaceholderFallback'),
+            value: form.baseUrl,
+            onInput: (event) => update('baseUrl', event?.target?.value ?? ''),
+            onKeyDown: onEnter,
+          }),
+          h('label', { key: 'em-label', className: 'jmw-cred-label', htmlFor: 'jmw-connect-email' }, t('credEmailLabel')),
+          h('input', {
+            key: 'em-input',
+            id: 'jmw-connect-email',
+            className: 'jmw-cred-input',
+            type: 'text',
+            inputMode: 'email',
+            autoComplete: 'off',
+            spellCheck: false,
+            placeholder: 'name@company.com',
+            value: form.email,
+            onInput: (event) => update('email', event?.target?.value ?? ''),
+            onKeyDown: onEnter,
+          }),
+          h('label', { key: 'tk-label', className: 'jmw-cred-label', htmlFor: 'jmw-connect-token' }, t('connectTokenLabel')),
+          h('input', {
+            key: 'tk-input',
+            id: 'jmw-connect-token',
+            className: 'jmw-cred-input',
+            type: 'password',
+            autoComplete: 'off',
+            spellCheck: false,
+            placeholder: origin?.configured
+              ? t('connectTokenKeep', { masked: origin.masked })
+              : t('connectTokenPlaceholder'),
+            value: form.token,
+            onInput: (event) => update('token', event?.target?.value ?? ''),
+            onKeyDown: onEnter,
+          }),
+        ]),
+        h('div', { key: 'actions', className: 'jmw-cred-actions jmw-connect-actions' }, [
+          h('button', {
+            key: 'submit',
+            type: 'button',
+            // 和配置页「保存并验证」同一套按钮样式（类 + 内联兜底色）。
+            className: 'jmw-cred-btn primary',
+            style: BTN_PRIMARY,
+            disabled: !canSubmit,
+            onClick: () => { void submit(); },
+          }, form.busy ? t('connectSaving') : t('connectSubmit')),
+          h('button', {
+            key: 'config',
+            type: 'button',
+            className: 'jmw-cred-btn',
+            style: BTN_PLAIN,
+            onClick: () => props?.onOpenConfig?.(),
+          }, t('failOpenConfig')),
+        ]),
+        form.error ? h('div', { key: 'error', className: 'jmw-cred-msg err' }, form.error) : null,
+        h('div', { key: 'note', className: 'jmw-connect-note' }, [
+          h('a', { key: 'tokens', className: 'jmw-cred-link', href: TOKENS_URL, target: '_blank', rel: 'noreferrer' }, t('credTokensLink')),
+        ]),
+      ]);
+    }
+
     function Panel() {
       const state = useSnapshot();
       const cardRef = React.useRef(null);
@@ -2714,9 +2906,11 @@ window.__ModuleLoader__.load({
       let body;
       if (state.failure) {
         // 可分类的失败：标题 + 一句「怎么办」+ 按钮；原始报错只在 detail 类里以小字附在下面。
+        // 「还没配置」这一类（站点 / 邮箱 / 令牌）不给失败提示：同一块位置直接换成连接表单。
         const meta = failureMeta(state.failure.code);
+        const setup = CONNECT_CODES.has(state.failure.code);
         const actions = [];
-        if (meta.config) {
+        if (!setup && meta.config) {
           actions.push(h('button', {
             key: 'config',
             type: 'button',
@@ -2727,20 +2921,28 @@ window.__ModuleLoader__.load({
             onClick: () => setCredOpen(true),
           }, t('failOpenConfig')));
         }
-        actions.push(h('button', {
-          key: 'retry',
-          type: 'button',
-          className: 'jmw-btn',
-          onClick: () => load(snapshot.scope),
-        }, t('retry')));
-        body = h('div', { className: 'jmw-state err jmw-failure' }, [
-          h('div', { key: 'title', className: 'jmw-failure-title' }, t(meta.title)),
-          h('div', { key: 'hint', className: 'jmw-failure-hint' }, t(meta.hint)),
-          h('div', { key: 'actions', className: 'jmw-failure-actions' }, actions),
-          meta.detail && state.failure.message
-            ? h('div', { key: 'detail', className: 'jmw-failure-detail' }, t('failDetail', { message: state.failure.message }))
-            : null,
-        ]);
+        if (!setup) {
+          actions.push(h('button', {
+            key: 'retry',
+            type: 'button',
+            className: 'jmw-btn',
+            onClick: () => load(snapshot.scope),
+          }, t('retry')));
+        }
+        body = setup
+          ? h(ConnectForm, {
+            key: 'connect',
+            onConnected: () => { void load(snapshot.scope); },
+            onOpenConfig: () => setCredOpen(true),
+          })
+          : h('div', { className: 'jmw-state err jmw-failure' }, [
+            h('div', { key: 'title', className: 'jmw-failure-title' }, t(meta.title)),
+            h('div', { key: 'hint', className: 'jmw-failure-hint' }, t(meta.hint)),
+            h('div', { key: 'actions', className: 'jmw-failure-actions' }, actions),
+            meta.detail && state.failure.message
+              ? h('div', { key: 'detail', className: 'jmw-failure-detail' }, t('failDetail', { message: state.failure.message }))
+              : null,
+          ]);
       } else if (state.error) {
         body = h('div', { className: 'jmw-state err' }, [
           h('div', { key: 'msg', className: 'msg' }, state.error),
