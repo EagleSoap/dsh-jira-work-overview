@@ -324,7 +324,7 @@ window.__ModuleLoader__.load({
         planDropped: '{key} 的计划对话已删除',
         planDropFailed: '删除计划对话失败：{message}',
         planBusy: '该任务正在建计划对话…',
-        planNoWorkspace: '项目 {project} 还没有绑定工作区：先在左侧侧栏里把项目挂到工作区。',
+        planNoWorkspace: '项目 {project} 没有绑定工作区，也取不到基座的默认工作区：先在左侧侧栏里把项目挂到工作区。',
         planFailed: '创建计划对话失败：{message}',
         planCreated: '{key} 的计划对话已创建（plan 模式）',
         planOpened: '已打开 {key} 的计划对话',
@@ -344,7 +344,7 @@ window.__ModuleLoader__.load({
         planDropped: 'Deleted the planning session for {key}',
         planDropFailed: 'Could not delete the planning session: {message}',
         planBusy: 'Creating the planning session…',
-        planNoWorkspace: 'Project {project} is not linked to a workspace: link it from the sidebar first.',
+        planNoWorkspace: 'Project {project} is not linked to a workspace and no default Workspace could be resolved: link it from the sidebar first.',
         planFailed: 'Could not create the planning session: {message}',
         planCreated: 'Planning session for {key} created (plan mode)',
         planOpened: 'Opened the planning session for {key}',
@@ -1154,7 +1154,10 @@ window.__ModuleLoader__.load({
 
     /* ------------------------------------------------ 任务 → 计划对话 */
     //
-    // 任务行后面的「计划」按钮：在项目绑定的工作区里开一个 plan 模式会话，让它先做任务规划。
+    // 任务行后面的「计划」按钮：开一个 plan 模式会话，让它先做任务规划。
+    // 落在哪个工作区：项目绑了工作区就建在那个工作区里；没绑（第一次用 / 映射丢了）就建在
+    // 基座的**默认工作区**里（`workspaces.initializeDefault()`：与侧栏第一次用时建的是同一个），
+    // 不再直接报错——按钮不该因为「还没关联」就什么都做不了。
     // 一个任务只对应一个计划对话（避免重复点出好几条）：绑定记在 host 的 volatile 配置
     // planSessions 里（一行一条 `ISSUE<TAB>sessionId`），和「项目 ↔ 工作区」同一个套路——
     // 前端只读写、不另存。重复点击时直接打开原来那条，不再新建；本地没记（比如换了浏览器）
@@ -1263,6 +1266,34 @@ window.__ModuleLoader__.load({
       return '';
     }
 
+    /**
+     * 项目没绑工作区时的落点：基座的「默认工作区」。
+     *
+     * 走客户端常驻的 `workspaces` 服务（不是 `remote.workspace`：面板没在 inject 里声明遥控，
+     * 硬取会抛 `cannot get property "remote.workspace" without inject`）：`initializeDefault()`
+     * 已经初始化过就直接返回那条，没有才按基座的目录策略建一个——与侧栏第一次用时的默认工作区
+     * 是同一个，之后会话自动归到它下面。服务缺席（老基座）或调用失败时返回空串，由调用方报错。
+     */
+    async function defaultWorkspaceId() {
+      const ctx = runtime.ctx;
+      if (!ctx || typeof ctx.get !== 'function') return '';
+      let workspaces;
+      try {
+        workspaces = ctx.get('workspaces');
+      } catch {
+        return '';
+      }
+      if (!workspaces || typeof workspaces.initializeDefault !== 'function') return '';
+      try {
+        const result = await workspaces.initializeDefault();
+        if (result && result.ok === false) return '';
+        const workspace = result?.value?.workspace ?? result?.workspace ?? result?.value ?? result;
+        return String(workspace?.workspaceId ?? workspace?.id ?? '');
+      } catch {
+        return '';
+      }
+    }
+
     /** 让新建的计划对话出现在主视图：uiWorkspace 是官方的换主视图接口。 */
     function openPlanSession(sessionId) {
       const ctx = runtime.ctx;
@@ -1349,7 +1380,8 @@ window.__ModuleLoader__.load({
       try {
         await fetchWorkspaceLinks();
         const project = projectOfKey(key);
-        const workspaceId = boundWorkspaceOf(project);
+        // 绑定了就建在项目的工作区里；没绑定落默认工作区（取不到才报错）。
+        const workspaceId = boundWorkspaceOf(project) || await defaultWorkspaceId();
         if (!workspaceId) throw new Error(t('planNoWorkspace', { project }));
         // 计划口径：profile 装了 plan 模式插件就用它的 section；没装时由首条消息自己带一份
         // （NO_POLICY_POLICY），不因为「宿主没配」就拒绝开对话。

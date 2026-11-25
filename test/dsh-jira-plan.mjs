@@ -3,10 +3,10 @@ import { prepareHostCopy, skipWhenUnavailable } from './lib-host-runtime.mjs';
 //
 // 全程不联网：Jira、DSH 的 remote / workspace / agents 服务都用桩，但**跑的是真的 index.js 与 client.js**。
 // 覆盖的正是需求本身：
-//   1. 点「计划」在项目绑定的工作区里建会话，/plan 先于第一条消息；
+//   1. 点「计划」在项目绑定的工作区里建会话（项目没绑就落基座的默认工作区），/plan 先于第一条消息；
 //   2. 第一条消息只含「任务 + 汇报口径 + 规则」，且带 `JIRA_PLAN_SESSION:<KEY>` 标记；
 //   3. 同一张卡再点一次不再新建（本地绑定命中；清掉本地配置后靠会话日志里的标记找回）；
-//   4. 项目没绑工作区 / 没配 plan 模式 → 明确报错，一条会话都不建；
+//   4. 连默认工作区都取不到（老基座）→ 明确报错，一条会话都不建；没配 plan 模式照样能规划；
 //   5. Jira 卡信息不全 → 首条消息里带「中断并告诉用户任务不明确」的指令，规划提示里也列出缺什么。
 import { copyFileSync, mkdirSync, existsSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -46,6 +46,17 @@ const JIRA_ISSUES = {
     key: 'APP-2',
     fields: { summary: '', status: { name: 'To Do' }, issuetype: { name: 'Task' }, description: { type: 'doc', content: [] }, issuelinks: [] },
   },
+  'APP-9': {
+    // 没绑定工作区的项目：用来验证「落到默认工作区」。
+    key: 'APP-9',
+    fields: {
+      summary: '导出当前筛选结果',
+      status: { name: 'To Do' },
+      issuetype: { name: 'Task' },
+      description: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '按当前筛选条件导出 CSV。' }] }] },
+      issuelinks: [],
+    },
+  },
 };
 const jiraCalls = [];
 
@@ -55,6 +66,9 @@ const settingsWrites = [];
 /* 「删掉计划对话」走的是基座的归档通道：记录调用，必要时模拟基座拒收。 */
 const archiveCalls = [];
 const connectionCalls = [];
+/* 默认工作区（未绑定项目的落点）：由 workspace 控制器提供，`false` = 老基座取不到。 */
+let defaultWorkspaceAvailable = true;
+const defaultWorkspaceCalls = [];
 const registryArchiveCalls = [];
 let registryArchiveRefuses = false;
 let archiveRefuses = false;
@@ -83,7 +97,21 @@ const hostCtx = {
       };
     }
     if (name === 'workspace') {
-      return { async get(id) { return id === 'ws-uuid-1' ? { id, path: TMP, title: 'tmp' } : undefined; } };
+      return {
+        async get(id) {
+          if (id === 'ws-uuid-1') return { id, path: TMP, title: 'tmp' };
+          if (id === 'ws-default-1') return { id, path: TMP, title: 'default-workspace' };
+          return undefined;
+        },
+      };
+    }
+    if (name === 'workspaceController') {
+      return {
+        async initializeDefault() {
+          defaultWorkspaceCalls.push(true);
+          return defaultWorkspaceAvailable ? { workspace: { workspaceId: 'ws-default-1', path: TMP, title: 'default-workspace' } } : undefined;
+        },
+      };
     }
     if (name === 'remote') return remoteService;
     // 工作区注册表本体：服务树上的键是 `workspaceRegistry`，`archivedSessionIds` 就是它写的。
@@ -319,11 +347,21 @@ check(dropAgain.ok === false && /绑定|bound/i.test(String(dropAgain.error)), '
 
 /* ------------------------------------------------------------- 场景 5 */
 
-const noWorkspace = await planPayload({ action: 'create', issue: 'APP-1' });
+console.log('\n场景 4（默认工作区 / 参数错误）');
+// 项目没绑工作区：落到基座的默认工作区（而不是直接报错不建）。
+const defaultCreate = await planPayload({ action: 'create', issue: 'APP-9' });
+syncWrites();
+check(defaultCreate.ok === true && Boolean(defaultCreate.sessionId), '没绑定工作区的项目在默认工作区建出计划对话', JSON.stringify({ ok: defaultCreate.ok, sessionId: defaultCreate.sessionId }));
+const defaultCreateCall = [...remoteCalls].reverse().find((call) => call.call === 'create');
+check(defaultCreateCall?.workspaceId === 'ws-default-1', '建会话用的是基座默认工作区 id', JSON.stringify(defaultCreateCall ?? null));
+check(defaultWorkspaceCalls.length > 0, '默认工作区走 workspaceController.initializeDefault()', String(defaultWorkspaceCalls.length));
+// 连默认工作区都取不到（老基座 / 服务缺席）才报错。
+defaultWorkspaceAvailable = false;
+const noWorkspace = await planPayload({ action: 'create', issue: 'APP-10' });
+defaultWorkspaceAvailable = true;
 const badAction = await planPayload({ action: 'nope', issue: 'APP-1' });
 const badKey = await planPayload({ action: 'link', issue: 'not-a-key', sessionId: 'x' });
-console.log('\n场景 4（参数错误）');
-check(noWorkspace.ok === false && /工作区/.test(noWorkspace.error), '缺工作区 id → 明确报错', noWorkspace.error);
+check(noWorkspace.ok === false && /工作区/.test(noWorkspace.error), '默认工作区也取不到 → 明确报错', noWorkspace.error);
 check(badAction.ok === false && /plan/.test(String(badAction.error)) === false && /操作|action/i.test(String(badAction.error)), '不支持的动作 → 明确报错', badAction.error);
 check(badKey.ok === false && /issue|key|APP-3489/i.test(String(badKey.error)), '非法 issue key → 明确报错', badKey.error);
 
@@ -500,6 +538,9 @@ const clientSessionsService = {
   },
 };
 const clientOpened = [];
+/* 基座的默认工作区：未绑定项目的落点；设成 null 模拟老基座取不到。 */
+let clientDefaultWorkspace = { workspaceId: 'ws-default-1', sessionIds: [] };
+const clientDefaultWorkspaceCalls = [];
 const clientCtx = {
   get(name) {
     if (name === 'remote.commands') {
@@ -564,7 +605,16 @@ const clientCtx = {
       };
     }
     if (name === 'sessions') return clientSessionsService;
-    if (name === 'workspaces') return { list: { getSnapshot: () => ({ items: [{ workspaceId: 'ws-uuid-1', sessionIds: ['sess-main'] }] }) } };
+    if (name === 'workspaces') {
+      // 基座的默认工作区服务：`null` = 老基座取不到（用来验证错误提示）。
+      return {
+        list: { getSnapshot: () => ({ items: [{ workspaceId: 'ws-uuid-1', sessionIds: ['sess-main'] }] }) },
+        async initializeDefault() {
+          clientDefaultWorkspaceCalls.push(true);
+          return { ok: true, value: { workspace: clientDefaultWorkspace } };
+        },
+      };
+    }
     return undefined;
   },
   on() { return () => {}; },
@@ -718,6 +768,52 @@ if (rows.length >= 2) {
   check(fresh[0]?.call === 'create', '没装 plan 模式插件也照样建出计划对话（不再被前置校验挡住）', fresh.map((call) => call.call).join(' → '));
   check(noPolicyText.includes('plan 模式') && noPolicyText.includes('只汇报'), '首条消息自带 plan 口径兜底', noPolicyText.split('\n').filter((line) => /plan 模式|只汇报/.test(line)).join(' / '));
 }
+
+/* ------------------------------------------------ 项目没绑工作区的兜底 */
+// OPS 项目不在 project-workspace 映射里（没绑工作区）：点「计划」应当落到基座的默认工作区，
+// 而不是弹一句「没有绑定工作区」把按钮堵死。
+const pushCard = (key, project, summary) => clientListItems.push({
+  key, project, summary, status: 'To Do', category: 'new',
+  type: 'Task', priority: '', sprintId: null, sprint: '', due: '', updated: '2026-11-19',
+  labels: [], parent: '', parentKey: '', parentSummary: '', epicKey: '', epicSummary: '',
+  url: `https://example.atlassian.net/browse/${key}`,
+});
+const planRowOf = async (key, expected) => {
+  for (let i = 0; i < 120; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const rows = planButtonsOf(render());
+    if (rows.length >= expected) {
+      const index = clientListItems.findIndex((row) => row.key === key);
+      return rows[index];
+    }
+  }
+  return undefined;
+};
+/* 面板默认停在自动选中的项目 tab 上（APP）：先切到「全部项目」，新项目的卡片才画得出来。 */
+const allProjectsPill = () => collectButtons(render()).find((row) => /jmw-pill/.test(String(row.props?.className ?? '')) && /全部项目|All projects/.test(collectText(row)));
+allProjectsPill()?.props?.onClick?.();
+pushCard('OPS-7', 'OPS', '按工单导出报表');
+refreshButton()?.props?.onClick?.();
+const opsRow = await planRowOf('OPS-7', 3);
+check(Boolean(opsRow), '列表里出现未绑定项目的任务', String(planButtonsOf(render()).length));
+const opsBefore = clientRemoteCalls.length;
+await opsRow?.props?.onClick?.({ preventDefault() {}, stopPropagation() {} });
+await settle(() => clientRemoteCalls.slice(opsBefore).some((call) => call.call === 'prompt'));
+const opsCreate = clientRemoteCalls.slice(opsBefore).find((call) => call.call === 'create');
+check(opsCreate?.workspaceId === 'ws-default-1', '项目没绑工作区 → 建在基座默认工作区', JSON.stringify(opsCreate ?? null));
+check(clientDefaultWorkspaceCalls.length > 0, '默认工作区走 workspaces.initializeDefault()', String(clientDefaultWorkspaceCalls.length));
+
+// 老基座没有默认工作区服务：这时才报错，一条会话都不建。
+clientDefaultWorkspace = null;
+pushCard('OPS-8', 'OPS', '按工单导出明细');
+refreshButton()?.props?.onClick?.();
+const opsRow2 = await planRowOf('OPS-8', 4);
+check(Boolean(opsRow2), '列表里出现第二张未绑定项目的任务');
+const opsBefore2 = clientRemoteCalls.length;
+await opsRow2?.props?.onClick?.({ preventDefault() {}, stopPropagation() {} });
+await settle(() => /没有绑定工作区/.test(collectText(render())));
+check(!clientRemoteCalls.slice(opsBefore2).some((call) => call.call === 'create'), '取不到默认工作区 → 不建会话', String(clientRemoteCalls.length - opsBefore2));
+check(/没有绑定工作区/.test(collectText(render())), '取不到默认工作区 → 面板给出明确原因', collectText(render()).slice(-120));
 
 globalThis.fetch = realFetch;
 console.log(failed === 0 ? '\n=== 计划对话测试：全部通过 ===' : `\n=== 计划对话测试：${failed} 项失败 ===`);

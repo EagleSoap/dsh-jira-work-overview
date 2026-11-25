@@ -98,14 +98,16 @@ Prefer files? Add an override row to your profile's `cordis.patch.yml` (this is 
 - Click a **status chip** on any row to move the issue; the list reloads. **Esc** closes the top-most layer (status menu → configure dialog → panel).
 - The list is **virtualized**: thousands of rows scroll smoothly because only the visible ones are in the DOM.
 - **Plan at the end of a row** (the `☰ 计划` chip) opens a *planning* conversation for that issue in the
-  workspace the project is linked to: the new session switches to plan mode, receives the issue key, title, status and link, and is told
+  workspace the project is linked to (or in DSH's default Workspace when it is not linked): the new session
+  switches to plan mode, receives the issue key, title, status and link, and is told
   to report **only the list of changes it intends to make** — no explanations, no analysis. You approve or amend
   the plan in that conversation, and nothing is executed before you do. If the issue is too thin to plan (no
   description, no parent and no links), the session stops instead of guessing and tells you the Jira issue is
   unclear. One issue maps to one planning session: once bound the chip is highlighted, clicking it reopens the
   existing conversation (the binding lives in the volatile `planSessions` config as `ISSUE<TAB>sessionId`, and a
-  lost binding is recovered from the `JIRA_PLAN_SESSION:<KEY>` marker in the session's first message). The button
-  reports what is missing when the project has no linked workspace; if the profile ships
+  lost binding is recovered from the `JIRA_PLAN_SESSION:<KEY>` marker in the session's first message). Only
+  when neither the project mapping nor DSH's default Workspace can be resolved does the button report what is
+  missing; if the profile ships
   `deepseek-ai/dsh-plan-mode`, its `section` is the planning policy, and without it the first message carries a
   built-in one ("plan only, list the changes, execute once the user agrees").
   A planned row also carries a `×`: it archives that conversation through DSH's own workspace archive
@@ -113,10 +115,12 @@ Prefer files? Add an override row to your profile's `cordis.patch.yml` (this is 
   unplanned again and the next click starts a fresh session. Archiving keeps the log — a mis-click is
   recoverable from the archive.
 
-### Planning: link a workspace, then plan
+### Planning: click `☰ Plan`
 
-The `☰ Plan` chip needs the project to be linked to a workspace first — that is the step first-time users
-miss. Four steps, and from then on every card is one click away from a planning conversation:
+The `☰ Plan` chip creates a planning-mode conversation. It lands in the project's linked workspace when there
+is one, and in DSH's **default Workspace** otherwise (the same one the sidebar initializes on first use) —
+an unlinked project is no longer a dead end. Linking is only needed when you want the conversation filed
+under a specific project workspace; four steps for that:
 
 <img src="docs/images/plan-flow.png" width="1040" alt="Four steps: (1) right-click the workspace row and pick 'Link Jira project…', (2) the panel opens by itself — click the dashed project tab to link it, (3) click the '☰ Plan' chip on a row, (4) back in the panel the chip turns blue and hovering the row shows a ×">
 
@@ -127,9 +131,10 @@ miss. Four steps, and from then on every card is one click away from a planning 
    to the current workspace." Candidate tabs carry a **dashed** outline — click one to link it; the header then
    reads "This workspace is linked to APP". Candidates appear only after the panel has fetched issues once, so
    hit *Refresh* if there are none.
-3. **Click the `☰ Plan` chip at the end of a row**: creates a planning-mode session in that project's workspace.
-   The first message only asks for a bullet list of the edits to make, and you agree to it in the conversation.
-   `deepseek-ai/dsh-plan-mode` is optional — a built-in policy is used when it is absent.
+3. **Click the `☰ Plan` chip at the end of a row**: creates a planning-mode session in that project's
+   workspace — or in DSH's default Workspace when the project is not linked. The first message only asks for a
+   bullet list of the edits to make, and you agree to it in the conversation. `deepseek-ai/dsh-plan-mode` is
+   optional — a built-in policy is used when it is absent.
 4. **Back in the panel**: the chip turns blue (`on`) = planned. Hovering the row reveals a `×` that archives the
    session and clears the binding (recoverable from the archive).
 
@@ -141,7 +146,7 @@ The real panel, for comparison (the two planned rows near the top are outlined):
 
 | What you see | Why | What to do |
 | --- | --- | --- |
-| `Project APP is not linked to a workspace: link it from the sidebar first.` | The project is not linked to any workspace (or the mapping was lost) | Redo steps 1–2 above |
+| `Project APP is not linked to a workspace and no default Workspace could be resolved: link it from the sidebar first.` | Neither the project mapping nor DSH's default Workspace could be resolved (workspace service unavailable / older DSH build) | Redo steps 1–2 above, or install a DSH build that provides the workspace service |
 | No candidate tabs / `No projects to link yet: open the panel once so the project list loads.` | The panel has never fetched issues successfully | Hit *Refresh*; if it still fails, set the site / email / token first |
 | The workspace context menu has no *Link Jira project…* | The client half of the plugin did not register (the host row can still read active) | Reinstall the bundle and reload the page |
 | The chip stays grey and does nothing | The previous session creation has not returned yet | Wait for it; a failure shows `Could not create the planning session: …` |

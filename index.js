@@ -317,7 +317,7 @@ const TEXT = {
     'err.projectKey': '无效的项目键：「{project}」，应为大写字母开头的字母数字串（如 APP）。',
     'err.projectWorkspaceId': '缺少工作区 id：没法把项目挂到工作区上。',
     'err.planIssue': '无效的 issue key：「{issue}」，应形如 APP-3489。',
-    'err.planWorkspaceId': '缺少工作区 id：计划对话要建在项目绑定的工作区里。',
+    'err.planWorkspaceId': '取不到工作区 id：项目没有绑定工作区，也取不到基座的默认工作区。',
     'err.planAction': '不支持的计划对话操作：{action}（支持 create / search / link / unlink / drop / clear）。',
     'err.planUnbound': '{key} 没有绑定计划对话：没有可归档的会话。',
     'err.planArchive': '归档计划对话失败：{message}',
@@ -520,7 +520,7 @@ const TEXT = {
     'err.projectKey': 'Invalid project key: "{project}"; expected an uppercase alphanumeric key such as APP.',
     'err.projectWorkspaceId': 'Missing workspace id: cannot link a project to a workspace.',
     'err.planIssue': 'Invalid issue key: "{issue}"; expected a key such as APP-3489.',
-    'err.planWorkspaceId': 'Missing workspace id: a planning session must live in the project\'s linked workspace.',
+    'err.planWorkspaceId': 'No workspace id: the project has no linked workspace and no default Workspace could be resolved.',
     'err.planAction': 'Unsupported planning-session action: {action} (create / search / link / unlink / drop / clear).',
     'err.planUnbound': '{key} has no bound planning session: nothing to archive.',
     'err.planArchive': 'Could not archive the planning session: {message}',
@@ -3075,8 +3075,10 @@ function registerProjectWorkspaceRoute(ctx, jira, settings) {
 
 /* --------------------------------------------- 任务 → 计划对话 */
 //
-// 面板任务行末尾的「计划」按钮：在项目绑定的工作区里开一条 plan 模式会话，先做任务规划，
-// 由用户在对话里敲定或修改。**一个任务只对应一条计划对话**——绑定存成一串
+// 面板任务行末尾的「计划」按钮：开一条 plan 模式会话，先做任务规划，由用户在对话里敲定或修改。
+// 落点：项目绑了工作区就建在那个工作区里；没绑（第一次用 / 映射丢了）就建在基座的**默认工作区**
+// （workspace 控制器的 `initializeDefault()`，与侧栏第一次用时是同一个），只有连它都取不到才报错。
+// **一个任务只对应一条计划对话**——绑定存成一串
 // `ISSUE<TAB>sessionId`（Config 的 planSessions，volatile，和 projectWorkspaces 同一个存法），
 // 重复点击时前端先查这里，命中就只打开。
 //
@@ -3245,12 +3247,32 @@ async function findPlanSessionByToken(ctx, key) {
 }
 
 /**
+ * 项目没绑工作区时的落点：基座的「默认工作区」。
+ *
+ * 走 workspace 控制器自己的 `initializeDefault()`：已经初始化过就直接返回那条 durable 工作区，
+ * 没有才按基座的目录策略建一个——与侧栏第一次用时的默认工作区是同一个。服务缺席（老基座）
+ * 或调用失败时返回空串，由调用方报 `err.planWorkspaceId`。
+ */
+async function defaultPlanWorkspaceId(ctx) {
+  const controller = safeService(ctx, 'workspaceController');
+  if (!controller || typeof controller.initializeDefault !== 'function') return '';
+  try {
+    const result = await controller.initializeDefault();
+    const workspace = result?.workspace ?? result?.value?.workspace ?? result?.value ?? result;
+    return String(workspace?.workspaceId ?? workspace?.id ?? '');
+  } catch {
+    return '';
+  }
+}
+
+/**
  * 建一条计划对话：工作区里新建会话 → /plan 进计划模式 → 投递首条消息。
  * 顺序是「先 plan 再投递」：会话是新的，命令当场生效；即便宿主把它排到第一次 step，
  * 也仍然排在任务消息之前。
  */
 async function createPlanSession(ctx, jira, payload, key) {
-  const workspaceId = String(payload?.workspaceId ?? '').trim();
+  // 绑了工作区就建在项目的工作区里；没绑（第一次用 / 映射丢了）落默认工作区。
+  const workspaceId = String(payload?.workspaceId ?? '').trim() || await defaultPlanWorkspaceId(ctx);
   if (!workspaceId) throw new Error(t('err.planWorkspaceId'));
   const signal = payload?.signal;
   const issue = await fetchPlanIssue(jira, key, signal);
