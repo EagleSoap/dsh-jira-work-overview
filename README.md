@@ -38,7 +38,7 @@ Show **your** Jira work items — with their real workflow status — inside [De
 DSH installs plugins from an **installation spec** — anything `pnpm add` accepts (registry package name, git URL, tarball, absolute path). Pick one:
 
 ```bash
-# 1) from the npm registry (published since 0.14.0; pin a version with @0.16.5)
+# 1) from the npm registry (published since 0.14.0; pin a version with @0.16.6)
 plugin_manager install_bundle(target="dsh-jira-work-overview")
 
 # 2) straight from GitHub (no npm publishing needed)
@@ -117,10 +117,22 @@ Prefer files? Add an override row to your profile's `cordis.patch.yml` (this is 
 
 ### Planning: click `☰ Plan`
 
-The `☰ Plan` chip creates a planning-mode conversation. It lands in the project's linked workspace when there
-is one, and in DSH's **default Workspace** otherwise (the same one the sidebar initializes on first use) —
-an unlinked project is no longer a dead end. Linking is only needed when you want the conversation filed
-under a specific project workspace; four steps for that:
+The `☰ Plan` chip at the end of a row creates a **planning-mode conversation** for that issue: the new session
+switches to plan mode, receives the issue key / title / status / link, and is told to report **only the list of
+changes it intends to make** — no explanations, no background, no analysis. You approve or amend the plan in
+that conversation, and nothing is executed before you do. If the card is too thin to plan (no summary, no
+description, no parent and no links), the session stops and says the Jira issue is unclear instead of guessing.
+
+**Where the conversation lands** is decided in one place, in this order:
+
+1. the workspace the project is linked to (sidebar → *Link Jira project…*), when there is one;
+2. otherwise DSH's **default Workspace** — the same one the sidebar initializes on first use — so an unlinked
+   project is no longer a dead end.
+
+Either way the session appears in the sidebar immediately and the main view switches to it. A planned row
+always reopens its existing conversation rather than creating a second one, so to file it under a project
+workspace: link the project first, archive the old conversation with `×`, then click *Plan* again. Linking a
+workspace to a project is a one-time four-step job:
 
 <img src="docs/images/plan-flow.png" width="1040" alt="Four steps: (1) right-click the workspace row and pick 'Link Jira project…', (2) the panel opens by itself — click the dashed project tab to link it, (3) click the '☰ Plan' chip on a row, (4) back in the panel the chip turns blue and hovering the row shows a ×">
 
@@ -148,6 +160,7 @@ The real panel, for comparison (the two planned rows near the top are outlined):
 | --- | --- | --- |
 | `Project APP is not linked to a workspace and no default Workspace could be resolved: link it from the sidebar first.` | Neither the project mapping nor DSH's default Workspace could be resolved (workspace service unavailable / older DSH build) | Redo steps 1–2 above, or install a DSH build that provides the workspace service |
 | No candidate tabs / `No projects to link yet: open the panel once so the project list loads.` | The panel has never fetched issues successfully | Hit *Refresh*; if it still fails, set the site / email / token first |
+| The planning conversation sits under *default-workspace*, not the project workspace | The project was not linked to a workspace when you clicked *Plan*, so it fell back to DSH's default Workspace | Link the project, archive the row with `×`, then click *Plan* again |
 | The workspace context menu has no *Link Jira project…* | The client half of the plugin did not register (the host row can still read active) | Reinstall the bundle and reload the page |
 | The chip stays grey and does nothing | The previous session creation has not returned yet | Wait for it; a failure shows `Could not create the planning session: …` |
 | It always reopens the same conversation | One issue maps to one planning session (by design) | Click `×` to archive it, then click *Plan* again |
@@ -254,7 +267,7 @@ Behind a corporate proxy on Windows, DSH needs the proxy env vars it was started
 
 ## Versions and upgrades
 
-The current version is **0.16.5** (2026-11-24). The changelog records 39 versions (from 0.1.0); GitHub carries **14 tags / releases** (0.13.0 → 0.16.5), and **0.13.4 was the first public release** — the earlier 0.1.0–0.12.0 exist only in `CHANGELOG.md` and the project notes, with no commit or tag behind them, so "an older version" means **0.13.0 or later**. Every release is described in [CHANGELOG.md](CHANGELOG.md).
+The current version is **0.16.6** (2026-11-26). The changelog records 40 versions (from 0.1.0); GitHub carries **15 tags / releases** (0.13.0 → 0.16.6), and **0.13.4 was the first public release** — the earlier 0.1.0–0.12.0 exist only in `CHANGELOG.md` and the project notes, with no commit or tag behind them, so "an older version" means **0.13.0 or later**. Every release is described in [CHANGELOG.md](CHANGELOG.md).
 
 ### Why people still install older versions
 
@@ -295,6 +308,7 @@ The current version is **0.16.5** (2026-11-24). The changelog records 39 version
 | 0.16.3 | 2026-11-23 | **fix** | the Jira site URL is now an editable field in the config page (placeholder = current URL, saved to the profile Cordis patch); the failure hint's **Configure** button matches **Save and verify** |
 | 0.16.4 | 2026-11-23 | **fix** | on a fresh profile, filling email + token + site URL and clicking only **Save & verify** left the URL unsaved, so the panel always said there was no site URL; the panel now also reloads automatically after a successful save |
 | 0.16.5 | 2026-11-24 | feature | **nothing configured shows a form, not an error**: the panel body is the Connect Jira form (site URL / email / API token) in the old failure slot, saved fields can stay empty, and the list reloads once Jira accepts the pair |
+| 0.16.6 | 2026-11-26 | feature | **`☰ Plan` works on an unlinked project too**: the planning conversation lands in the project's workspace when there is one and in DSH's default Workspace otherwise (resolved through `workspaces.initializeDefault()` client-side and `workspaceController.initializeDefault()` host-side); only when neither resolves does it fail, with copy that says so |
 
 > 0.1.0–0.12.0 all happened on 2026-11-18; tags and GitHub Releases start at 0.13.0.
 > To install an older version: `plugin_manager install_bundle(target="github:EagleSoap/dsh-jira-work-overview#v0.13.2")`, or pin the npm version with `target="dsh-jira-work-overview@0.14.0"` (the earliest version on npm is 0.14.0).

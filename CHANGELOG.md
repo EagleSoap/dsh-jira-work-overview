@@ -4,6 +4,22 @@ All notable changes to **dsh-jira-work-overview** are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The first 25 releases were built in a single day, so the dates are real but the cadence was not: each entry lists what changed, not how long it took.
 
+## [0.16.6] - 2026-11-26
+
+### Changed
+
+- **「计划」不再要求项目先绑定工作区。** 以前项目没挂工作区时点「计划」只报一句「项目还没有绑定工作区」，
+  一条会话都不建；现在落点按一条顺序判定：项目已绑定的工作区 → 基座的**默认工作区**
+  （`workspaces.initializeDefault()`，与侧栏第一次用时初始化的是同一个），只有连默认工作区都取不到
+  （老基座没有工作区服务 / 调用失败）才报错并说明缺什么。host 侧（`createPlanSession`）同样兜底，
+  客户端与 host 的中英文案同步改。
+  为什么不能只删那句报错：DSH 的 `session.create` 在既无 `workspaceId` 又无 `cwd` 时用的是**基座的
+  `defaultCwd`**，不是默认工作区，所以两边都必须显式解析出默认工作区的 id。
+
+- **README 把「计划」的落点写清楚了。** 中英两份都新增「落在哪个工作区」的判定顺序、两种落点分别长什么样、
+  怎么把已经生成的计划对话挪进项目工作区（先关联、再点 `×` 归档、重新点「计划」），错误表补了
+  「计划会话进了 `default-workspace`」一行；`test/README.md` 的套件说明同步。
+
 ## [0.16.5] - 2026-11-24
 
 ### Added
